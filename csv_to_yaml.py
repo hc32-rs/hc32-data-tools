@@ -288,8 +288,6 @@ def emit_chips(repo: Path, ctx: dict, mem_files: dict) -> list[Path]:
         doc = {
             "name": part,
             "family": s,
-            "subfamily": CPU_MAP.get((cpu_by_series.get(s) or "").upper(),
-                                     cpu_by_series.get(s) or ""),
             "packages": [{"name": part, "package": pkg}] if pkg else [],
         }
         f, sz = (row.get("flash_kb") or "").strip(), (row.get("sram_kb") or "").strip()
