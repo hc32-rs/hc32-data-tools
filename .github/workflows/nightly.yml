@@ -28,16 +28,13 @@ jobs:
       - name: Generate
         run: |
           COMMIT=$(git rev-parse HEAD)
-          COMMIT_MESSAGE=$(git log -1 --pretty=%B)
           echo "COMMIT=$COMMIT" >> "$GITHUB_ENV"
-          echo "COMMIT_MESSAGE=$COMMIT_MESSAGE" >> "$GITHUB_ENV"
           ./d gen
       - name: Push to hc32-rs/hc32-metapac
         run: |
           cd build/hc32-metapac
           cp -v ../../LICENSE* .
-          git init
-          git checkout -b main
+          git init -b main
           git add .
           git config user.name "hc32-data-tools builder"
           git config user.email "action@github.com"
