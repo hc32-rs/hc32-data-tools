@@ -40,7 +40,8 @@ xh_ll_sdk ───extract_ll_csv.py───▶ hc32-ll-data/data/csv/（同上
 
 ### `data/registers/<kind>_<version>.yaml`（寄存器块）
 
-- **来源**：两仓库 `svd/*.svd`（来源为 SDK 内 SVD，git 行尾归一为 LF）。
+- **来源**：两仓库 `svd/*.svd`（来源为 SDK 内 SVD）。行尾由各仓库 `.gitattributes`
+  统一管控：仓库内归一为 LF，检出为 CRLF。
 - **工具**：`chiptool_registers.py` = [chiptool](https://github.com/embassy-rs/chiptool)
   `extract-all` + 聚合。
 - **过程**：

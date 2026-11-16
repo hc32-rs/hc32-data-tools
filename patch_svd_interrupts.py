@@ -15,7 +15,7 @@ data/interrupts/<系列>.yaml（中断名→CMSIS IRQ 编号，来自设备头 I
    运行时经 INTC/AOS 路由，无外设专属 NVIC 向量）→ 整系列跳过，不改其 SVD。
 
 写回为文本级行插入/删除：XML 声明、缩进、属性顺序、注释、其余行一律不变，
-插入行沿用该文件自身行尾（DDL CRLF / LL LF），保证 git diff 只有中断节点增删。
+插入行沿用该文件自身行尾（两仓库 SVD 检出均为 CRLF），保证 git diff 只有中断节点增删。
 
 用法（在 hc32-rs-workspace 下）：
   python3 hc32-data-tools/patch_svd_interrupts.py             # 两仓库全部系列
