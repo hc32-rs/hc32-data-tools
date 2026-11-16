@@ -20,7 +20,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Use Rust stable
-        run: rustup default stable
+        run: |
+          rustup default stable
+          rustup component add rustfmt
       - name: Clone data repos
         run: |
           git clone --depth 1 https://github.com/hc32-rs/hc32-ddl-data ../hc32-ddl-data

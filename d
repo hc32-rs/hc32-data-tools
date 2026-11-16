@@ -18,6 +18,9 @@ case "$CMD" in
         # 须在 hc32-data-tools 仓库根目录运行；数据仓库为同级兄弟目录
         rm -rf build/data
         cargo run -p hc32-data-gen && cargo run -p hc32-metapac-gen
+        # chiptool 输出为 proc-macro2 token 流（未排版）；生成 crate 是 edition 2024
+        # （unsafe extern / #[unsafe(...)]），rustfmt 须显式指定 edition 才能解析
+        find build/hc32-metapac/src -name '*.rs' -print0 | xargs -0 rustfmt --edition 2024
     ;;
     test-metapac)
         CHIP=${1:-hc32f003c4pa}

@@ -97,6 +97,29 @@ cargo install --path /tmp/chiptool-src --locked
 
 ### `data/registers/<kind>_<version>.yaml`（寄存器块）
 
+> 以下描述**当前生成链**。外设功能版本的新命名还在文档评审阶段，尚未接入生成器。
+> 拟议文件名为 `<kind>_ddl_vN[_M].rs` / `<kind>_ll_vN[_M].rs`，DDL、LL 独立编号，
+> 同档不同布局使用数字后缀。完整外设名恢复 I2C/I2S、TMR0/2/4 等被旧 kind 截断的名称。
+> 规则与范围见 [DDL 版本说明](../hc32-ddl-data/docs/layout-versions.md)和
+> [LL 版本说明](../hc32-ll-data/docs/layout-versions.md)。LL README 的 M4 扩展项本次排除。
+
+两仓库的 `docs/peripheral-version-map.json` 显式分配目标版本，
+`docs/peripheral-versions.csv` 列出系列/实例、当前来源及拟议目标文件。
+表中 `current_version` 是各数据仓库的版本，**不是**下游 `version_remaps` 临时分配的合并版本。
+使用下面的独立文档导出命令（Python 3 + PyYAML），不运行 PAC 生成，不修改 `data/` 或 SVD：
+
+```sh
+# 从工作区根目录运行
+python3 hc32-data-tools/scripts/export_peripheral_versions.py
+python3 hc32-data-tools/scripts/export_peripheral_versions.py --check
+```
+
+导出器同时更新两个 CSV、版本总览及外设专题的标记表格。它不自动编号；
+来源 SHA-256、实例覆盖、唯一目标、排除项、编号连续性或文档引用不一致时会报错。
+两仓库都通过校验后才写出。`--check` 只读，并检查产物是否需要更新。
+相同档位的变体附带相对基础布局的差异提示；没有检测出寄存器坐标/内联字段差异也不自动合并。
+文档及对照表确认后，才迁移数据合并与 metapac 生成链中的文件名、模块和元数据引用。
+
 - **来源**：两仓库 `svd/*.svd`（来源为 SDK 内 SVD）。行尾由各仓库 `.gitattributes`
   统一管控：仓库内与检出均为 LF。
 - **工具**：`chiptool_registers.py` = chiptool `extract-all` + 聚合。
@@ -179,6 +202,10 @@ cargo install --path /tmp/chiptool-src --locked
   模块名统一 `<kind>_<version>`。每芯片生成 `pac.rs`（寄存器访问）、
   `metadata.rs`（`METADATA` 元数据）、`device.x`（中断向量）、`memory_x/`
   （memory.x 链接脚本素材）。
+  chiptool 渲染结果是未排版的 proc-macro2 token 流，`./d gen` 末尾用
+  `rustfmt --edition 2024`（生成 crate 为 edition 2024）对
+  `build/hc32-metapac/src` 全量排版后产物才算定稿；本地与 nightly CI
+  都走这一步，保证两边输出一致。
 
 生成的 `build/hc32-metapac` 即 `hc32-metapac` crate（当前 218 个芯片，feature 为
 完整型号小写，如 `hc32f003c4pa`）。可用 feature：`pac`（默认）、`metadata`、`rt`、
