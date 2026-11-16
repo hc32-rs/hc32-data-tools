@@ -25,7 +25,7 @@ from pathlib import Path
 
 import yaml
 
-WS = Path(__file__).resolve().parent.parent
+WS = Path(__file__).resolve().parents[2]
 BUILD = WS / "build"
 
 VER_FIELDS = ["series", "instance", "kind", "version", "block"]

@@ -3,8 +3,8 @@ r"""chiptool 试验脚本：批量对两仓库 SVD 跑 chiptool extract-all，�
 不触碰现有 data/。随后可用 compare_chiptool.py 与现有 registers.csv 对比。
 
 用法：
-  python3 chiptool_trial.py                  # 全部 SVD
-  python3 chiptool_trial.py --series HC32F460
+  python3 scripts/chiptool_trial.py                  # 全部 SVD
+  python3 scripts/chiptool_trial.py --series HC32F460
 """
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-WS = Path(__file__).resolve().parent.parent
+WS = Path(__file__).resolve().parents[2]
 TRIAL = WS / "tools" / "chiptool-trial"
 
 

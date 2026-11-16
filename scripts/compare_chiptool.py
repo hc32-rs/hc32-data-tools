@@ -19,7 +19,7 @@ from pathlib import Path
 
 import yaml
 
-WS = Path(__file__).resolve().parent.parent
+WS = Path(__file__).resolve().parents[2]
 TRIAL = WS / "tools" / "chiptool-trial"
 
 

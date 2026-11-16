@@ -14,8 +14,8 @@ svd_meta.csv 列：
 供 csv_to_yaml.py 生成芯片 YAML 的 cores 段。
 
 用法：
-  python3 svd_to_registers_csv.py                # 处理两个仓库
-  python3 svd_to_registers_csv.py --repo hc32-ll-data
+  python3 scripts/svd_to_registers_csv.py                # 处理两个仓库
+  python3 scripts/svd_to_registers_csv.py --repo hc32-ll-data
 """
 from __future__ import annotations
 
@@ -226,7 +226,7 @@ def main() -> None:
     ap.add_argument("--svd-dir", help="覆盖 SVD 目录（配合单个 --repo）")
     args = ap.parse_args()
 
-    ws = Path(__file__).resolve().parent.parent
+    ws = Path(__file__).resolve().parents[2]
     repos = [Path(r) for r in args.repo] or [ws / "hc32-ddl-data", ws / "hc32-ll-data"]
     for repo in repos:
         svd_dir = Path(args.svd_dir) if args.svd_dir else repo / "svd"

@@ -12,16 +12,24 @@ PAC（寄存器访问层）与 HAL 生成使用。
 
 ## 目录布局要求
 
-本仓库须与数据仓库、SDK 放在同一父目录下（脚本默认 `../` 定位）：
+本仓库须与数据仓库、SDK 放在同一父目录下（脚本按自身位置定位 `../../`）：
 
 ```
 hc32-rs-workspace/
-├── hc32-data-tools/     ← 本仓库（脚本）
+├── hc32-data-tools/     ← 本仓库（脚本在 scripts/ 子目录）
 ├── hc32-ddl-data/       ← DDL 系列数据仓库
 ├── hc32-ll-data/        ← LL 系列数据仓库
 ├── xh_ddl_sdk/          ← 小华 DDL SDK（含 documents/DS_*.pdf、RM_*.pdf）
 ├── xh_ll_sdk/           ← 小华 LL SDK
 └── build/               ← 运行期缓存（chiptool 原始输出、修补 SVD），可随时删除
+```
+
+仓库内部：
+
+```
+hc32-data-tools/
+├── scripts/             ← 全部提取/转换 Python 脚本与 CSV_SCHEMA.md
+└── README.md
 ```
 
 ## 流水线总览
@@ -106,13 +114,13 @@ xh_ll_sdk ───extract_ll_csv.py───▶ hc32-ll-data/data/csv/（同上
 
 ```bash
 # 依赖：python3 + pypdf/pyyaml；chiptool（见下）
-python3 extract_ddl_csv.py         # 1. DDL SDK → CSV
-python3 extract_ll_csv.py          # 2. LL SDK → CSV
-python3 hdsc_fetch_products.py     # 3. 官网型号 → website_chips.csv
-python3 chiptool_registers.py      # 4. SVD → data/registers/（chiptool）
-python3 svd_to_registers_csv.py    #    （核对基准 registers.csv + svd_meta.csv）
-python3 csv_to_yaml.py             # 5. CSV → chips/family/interrupts/dma/memory（末尾自动校验）
-python3 patch_svd_interrupts.py    # 6. family+interrupts YAML → SVD 注入/替换 <interrupt>（--dry-run 预览；改前登记 CHANGELOG）
+python3 scripts/extract_ddl_csv.py         # 1. DDL SDK → CSV
+python3 scripts/extract_ll_csv.py          # 2. LL SDK → CSV
+python3 scripts/hdsc_fetch_products.py     # 3. 官网型号 → website_chips.csv
+python3 scripts/chiptool_registers.py      # 4. SVD → data/registers/（chiptool）
+python3 scripts/svd_to_registers_csv.py    #    （核对基准 registers.csv + svd_meta.csv）
+python3 scripts/csv_to_yaml.py             # 5. CSV → chips/family/interrupts/dma/memory（末尾自动校验）
+python3 scripts/patch_svd_interrupts.py    # 6. family+interrupts YAML → SVD 注入/替换 <interrupt>（--dry-run 预览；改前登记 CHANGELOG）
 ```
 
 辅助/审计脚本：
@@ -129,7 +137,7 @@ cargo install --path /tmp/chiptool-src --locked
 
 ## CSV 列定义
 
-统一列契约见 [CSV_SCHEMA.md](CSV_SCHEMA.md)。补充：
+统一列契约见 [scripts/CSV_SCHEMA.md](scripts/CSV_SCHEMA.md)。补充：
 
 - `website_chips.csv` 与 `chips.csv` 同列头（source=website）；
 - `registers.csv`（审计用）：`series,instance,kind,register,offset,description,

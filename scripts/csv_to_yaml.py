@@ -20,8 +20,8 @@ r"""把 data/csv/ 下的提取结果转换成 ch32-data 风格的 YAML 目录。
   registers/<kind>_<version>.yaml 寄存器块（block/… + fieldset/… 格式）
 
 用法：
-  python3 csv_to_yaml.py                        # 两个仓库都转换
-  python3 csv_to_yaml.py --repo hc32-ll-data    # 只转一个
+  python3 scripts/csv_to_yaml.py                        # 两个仓库都转换
+  python3 scripts/csv_to_yaml.py --repo hc32-ll-data    # 只转一个
 """
 from __future__ import annotations
 
@@ -370,7 +370,7 @@ def main() -> None:
     ap.add_argument("--repo", action="append", default=[],
                     help="数据仓库目录（可多次）；默认 hc32-ddl-data 与 hc32-ll-data")
     args = ap.parse_args()
-    ws = Path(__file__).resolve().parent.parent
+    ws = Path(__file__).resolve().parents[2]
     repos = [Path(r) for r in args.repo] or [ws / "hc32-ddl-data", ws / "hc32-ll-data"]
     for repo in repos:
         print(f"== {repo.name} ==")

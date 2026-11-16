@@ -11,9 +11,9 @@ r"""从小华半导体官网 (www.xhsc.com.cn) 拉取 HC32 型号列表为 CSV�
 的 chips.csv 合并（DS 行优先，website 行补缺）。
 
 用法：
-  python3 hdsc_fetch_products.py                # 写入两个仓库
-  python3 hdsc_fetch_products.py --out foo.csv  # 只写指定文件
-  python3 hdsc_fetch_products.py --list-series  # 只打印发现的系列
+  python3 scripts/hdsc_fetch_products.py                # 写入两个仓库
+  python3 scripts/hdsc_fetch_products.py --out foo.csv  # 只写指定文件
+  python3 scripts/hdsc_fetch_products.py --list-series  # 只打印发现的系列
 """
 from __future__ import annotations
 
@@ -294,9 +294,10 @@ def main() -> None:
                     help="只打印发现的系列，不抓型号")
     args = ap.parse_args()
 
+    ws = Path(__file__).resolve().parents[2]
     default_out = [
-        Path(__file__).resolve().parent.parent / "hc32-ddl-data/data/csv/website_chips.csv",
-        Path(__file__).resolve().parent.parent / "hc32-ll-data/data/csv/website_chips.csv",
+        ws / "hc32-ddl-data/data/csv/website_chips.csv",
+        ws / "hc32-ll-data/data/csv/website_chips.csv",
     ]
     cache = Path(args.cache_dir)
     cache.mkdir(parents=True, exist_ok=True)

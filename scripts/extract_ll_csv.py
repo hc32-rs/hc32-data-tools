@@ -1064,7 +1064,8 @@ def extract_chips(series, sdk_root, sdk_dir, no_ds_note=None):
 # --------------------------------------------------------------------------
 
 def workspace_root():
-    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    # scripts/ 在 hc32-data-tools 仓库内，工作区根还要再上两级
+    return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 def find_svd(series):

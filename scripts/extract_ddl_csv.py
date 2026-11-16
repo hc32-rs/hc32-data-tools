@@ -29,9 +29,10 @@ try:
 except ImportError:  # pragma: no cover
     pypdf = None
 
-DEFAULT_SDK_ROOT = "/Volumes/aigo_1t/GitRepo/hc32-rs-workspace/xh_ddl_sdk"
-DEFAULT_SVD_DIR = "/Volumes/aigo_1t/GitRepo/hc32-rs-workspace/hc32-ddl-data/svd"
-DEFAULT_OUT = "/Volumes/aigo_1t/GitRepo/hc32-rs-workspace/hc32-ddl-data/data/csv"
+_WS = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+DEFAULT_SDK_ROOT = os.path.join(_WS, "xh_ddl_sdk")
+DEFAULT_SVD_DIR = os.path.join(_WS, "hc32-ddl-data", "svd")
+DEFAULT_OUT = os.path.join(_WS, "hc32-ddl-data", "data", "csv")
 
 CHIPS_HEADER = ["part_no", "series", "freq_mhz", "flash_kb", "sram_kb", "package",
                 "pin_count", "gpio", "vdd_min", "vdd_max", "uart", "spi", "i2c",
