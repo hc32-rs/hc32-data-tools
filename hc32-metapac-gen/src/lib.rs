@@ -106,6 +106,11 @@ impl Gen {
         )
         .unwrap();
         fs::write(
+            self.opts.out_dir.join(".gitignore"),
+            include_bytes!("../res/.gitignore"),
+        )
+        .unwrap();
+        fs::write(
             self.opts.out_dir.join("README.md"),
             include_bytes!("../res/README.md"),
         )
