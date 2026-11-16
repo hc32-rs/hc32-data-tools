@@ -274,7 +274,7 @@ def process_repo(repo: Path, work: Path, fixed: Path) -> dict:
     rows.sort(key=lambda r: (r["series"], r["instance"]))
     with open(repo / "data" / "csv" / "register_versions.csv", "w", newline="",
               encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=VER_FIELDS)
+        w = csv.DictWriter(f, fieldnames=VER_FIELDS, lineterminator="\n")
         w.writeheader()
         w.writerows(rows)
     print(f"{repo.name}: registers {n_files} 文件，实例映射 {len(rows)} 行",

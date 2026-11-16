@@ -241,11 +241,11 @@ def main() -> None:
             print(f"{repo.name}/{svd.name}: {len(rows)} 行（{meta['peripheral_count']} 外设, cpu={meta['cpu'] or '?'}）",
                   file=__import__("sys").stderr)
         with open(out_dir / "registers.csv", "w", newline="", encoding="utf-8") as f:
-            w = csv.DictWriter(f, fieldnames=REG_FIELDS)
+            w = csv.DictWriter(f, fieldnames=REG_FIELDS, lineterminator="\n")
             w.writeheader()
             w.writerows(all_rows)
         with open(out_dir / "svd_meta.csv", "w", newline="", encoding="utf-8") as f:
-            w = csv.DictWriter(f, fieldnames=META_FIELDS)
+            w = csv.DictWriter(f, fieldnames=META_FIELDS, lineterminator="\n")
             w.writeheader()
             w.writerows(metas)
         print(f"{repo.name}: registers.csv 共 {len(all_rows)} 行 → {out_dir}",

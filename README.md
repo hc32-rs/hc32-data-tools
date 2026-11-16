@@ -31,8 +31,9 @@ xh_ddl_sdk ──extract_ddl_csv.py──▶ hc32-ddl-data/data/csv/{chips,inter
 xh_ll_sdk ───extract_ll_csv.py───▶ hc32-ll-data/data/csv/（同上）───────────────────────────────────────┤
                                                                                                         ├─▶ csv_to_yaml.py
 小华官网 ────hdsc_fetch_products.py──▶ 两侧 data/csv/website_chips.csv ─────────────────────────────────┤    （chips/family/
-两仓库 svd/ ──chiptool_registers.py─▶ 两侧 data/registers/ + register_versions.csv ────────────────────┤     interrupts/dma/
-            ─svd_to_registers_csv.py─▶ 两侧 data/csv/registers.csv（核对基准）+ svd_meta.csv ──────────┘     memory 生成）
+两仓库 data/{family,interrupts} ─patch_svd_interrupts.py─▶ 两仓库 svd/（注入/替换 <interrupt> 节点）      │     interrupts/dma/
+两仓库 svd/ ──chiptool_registers.py─▶ 两侧 data/registers/ + register_versions.csv ────────────────────┤     memory 生成）
+            ─svd_to_registers_csv.py─▶ 两侧 data/csv/registers.csv（核对基准）+ svd_meta.csv ──────────┘
 ```
 
 ## 各 YAML 的生成方式
@@ -82,6 +83,10 @@ xh_ll_sdk ───extract_ll_csv.py───▶ hc32-ll-data/data/csv/（同上
 
 - **来源**：设备头 `IRQn_Type` 枚举（多数 HC32 SVD 的中断节点缺失/为 0，
   不可用）。负数内核中断（NMI/HardFault 等）不列入。
+- **回流**：`patch_svd_interrupts.py` 用它 + family YAML 的外设
+  `interrupts:` 段把中断节点补回两仓库 SVD（文本级插入，最小 diff；
+  名字查不到编号的条目跳过并报告；LL 共享 INTxxx 重定向向量系列整系列
+  跳过）。修改前须在对应仓库 `svd/CHANGELOG.md` 登记。
 
 ### `data/dma/<series>_<DMA>.yaml`（DMA 触发源）
 
@@ -106,6 +111,7 @@ python3 hdsc_fetch_products.py     # 3. 官网型号 → website_chips.csv
 python3 chiptool_registers.py      # 4. SVD → data/registers/（chiptool）
 python3 svd_to_registers_csv.py    #    （核对基准 registers.csv + svd_meta.csv）
 python3 csv_to_yaml.py             # 5. CSV → chips/family/interrupts/dma/memory（末尾自动校验）
+python3 patch_svd_interrupts.py    # 6. family+interrupts YAML → SVD 注入/替换 <interrupt>（--dry-run 预览；改前登记 CHANGELOG）
 ```
 
 辅助/审计脚本：
