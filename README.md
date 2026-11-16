@@ -2,8 +2,9 @@
 
 小华半导体 HC32 系列的数据提取与 YAML 生成工具链。从 SDK 文档（数据手册 PDF、
 设备头、驱动头）、SVD 文件与小华官网提取数据为 CSV，再转换为
-[ch32-rs/ch32-data](https://github.com/ch32-rs/ch32-data) 风格的 YAML，供
-PAC（寄存器访问层）与 HAL 生成使用。
+[ch32-rs/ch32-data](https://github.com/ch32-rs/ch32-data) 风格的 YAML；
+本仓库同时包含从 YAML 生成 [hc32-metapac](https://github.com/hc32-rs/hc32-metapac)
+（PAC + 元数据 crate）的 Rust 生成链，供 HAL 构建使用。
 
 - 数据仓库：[hc32-ddl-data](https://github.com/hc32-rs/hc32-ddl-data)（20 个老 DDL 驱动系列）
   与 [hc32-ll-data](https://github.com/hc32-rs/hc32-ll-data)（27 个 LL 驱动系列）
@@ -12,7 +13,8 @@ PAC（寄存器访问层）与 HAL 生成使用。
 
 ## 目录布局要求
 
-本仓库须与数据仓库、SDK 放在同一父目录下（脚本按自身位置定位 `../../`）：
+本仓库须与数据仓库、SDK 放在同一父目录下（脚本/生成链均按自身位置定位工作区，
+如 `scripts/*.py` 内为 `parents[2]`）：
 
 ```
 hc32-rs-workspace/
@@ -28,7 +30,12 @@ hc32-rs-workspace/
 
 ```
 hc32-data-tools/
-├── scripts/             ← 全部提取/转换 Python 脚本与 CSV_SCHEMA.md
+├── scripts/             ← 提取/转换 Python 脚本与 CSV_SCHEMA.md
+├── hc32-data-serde/     ← 芯片/外设 YAML 的 serde 类型（Rust）
+├── hc32-data-gen/       ← 双仓库 YAML → build/data/*.json（Rust）
+├── hc32-data-macros/    ← EnumDebug derive（生成元数据用）
+├── hc32-metapac-gen/    ← build/data → build/hc32-metapac（PAC 生成，Rust）
+├── d                    ← 工作流入口脚本（gen / ci / test-metapac）
 └── README.md
 ```
 
@@ -43,6 +50,45 @@ xh_ll_sdk ───extract_ll_csv.py───▶ hc32-ll-data/data/csv/（同上
 两仓库 svd/ ──chiptool_registers.py─▶ 两侧 data/registers/ + register_versions.csv ────────────────────┤     memory 生成）
             ─svd_to_registers_csv.py─▶ 两侧 data/csv/registers.csv（核对基准）+ svd_meta.csv ──────────┘
 ```
+
+## Rust 生成链（对标 ch32-data 的四个 crate）
+
+从 [ch32-data](https://github.com/ch32-rs/ch32-data) 移植的四个 crate（chiptool 锁定
+[embassy-rs/chiptool@e890244](https://github.com/embassy-rs/chiptool)）：
+
+```
+hc32-ddl-data/data ─┐
+                    ├─▶ hc32-data-gen ─▶ build/data/{chips,registers}/*.json
+hc32-ll-data/data ──┘                        │
+                                             ▼
+                                  hc32-metapac-gen ─▶ build/hc32-metapac/
+                                                      （= hc32-metapac crate，CI 推送到
+                                                        hc32-rs/hc32-metapac 仓库）
+```
+
+- `hc32-data-serde`：`data/chips/*.yaml` 顶层结构的 serde 类型。与 ch32 版差异：
+  无 subfamily/NV（非易失描述符）/ram-code 内存选项；`rcc` 只有 `enable`
+  （PWC/FCG 时钟门控位）；内存区命名 FLASH/SRAM。
+- `hc32-data-gen`：读**两个**数据仓库根（`HC32_DATA_ROOTS` 环境变量可覆盖，
+  默认 `ddl=../hc32-ddl-data/data:ll=../hc32-ll-data/data`）。两仓库寄存器
+  版本号各自独立编号，同名不同布局时按 DDL→LL 顺序确定性地改派空闲版本号
+  （`version_remaps`），芯片侧重定向。DMA 触发按 HC32 语义挂 `request` 号
+  （DDL=TRI_SEL 全局索引 / LL=EVT_SRC 事件号），不推断物理通道。
+- `hc32-metapac-gen`：ARM-only（HC32 中断号已是 CMSIS 0 基，无 ch32 的 -16
+  调整）。生成 `pac.rs`（寄存器访问）、`metadata.rs`（METADATA 元数据）、
+  `device.x`（中断向量）、`memory_x/`（memory.x 链接脚本素材）。同一芯片内
+  同一外设 kind 允许多版本（MODE 拆分的定时器），模块名统一 `<kind>_<version>`。
+- 生成命令：`./d gen`；构建验证：`./d ci`（M0+ 与 M4F 各一芯片 + host 元数据测试）。
+
+已知取舍（生成时降级并在日志告警，数据补齐后自动恢复）：
+
+1. SVD 实例名与设备头外设名不一致的外设（如 TIM0_MODE0 vs TIM0，367 个）
+   → 降级为纯地址外设（无寄存器块）；
+2. 无内存布局的芯片（F120/M120/F155/A472 系列，16 个）→ 跳过不生成；
+3. IRQn 同号别名/共享重定向向量（如 INT000/SWINT0，1192 处）→ 保留枚举
+   中最先出现的主名；
+4. DMA 触发源里无对应外设实例的（PORT_EIRQ/LVD/EVENT_PORT 等端口与系统
+   事件，4362 处）→ 跳过挂载。
 
 ## 各 YAML 的生成方式
 
@@ -121,6 +167,8 @@ python3 scripts/chiptool_registers.py      # 4. SVD → data/registers/（chipto
 python3 scripts/svd_to_registers_csv.py    #    （核对基准 registers.csv + svd_meta.csv）
 python3 scripts/csv_to_yaml.py             # 5. CSV → chips/family/interrupts/dma/memory（末尾自动校验）
 python3 scripts/patch_svd_interrupts.py    # 6. family+interrupts YAML → SVD 注入/替换 <interrupt>（--dry-run 预览；改前登记 CHANGELOG）
+./d gen                                    # 7. 双仓库 YAML → build/data + build/hc32-metapac（Rust 生成链）
+./d ci                                     # 8. 生成 + M0+/M4F 构建与 host 元数据测试
 ```
 
 辅助/审计脚本：
@@ -152,4 +200,8 @@ cargo install --path /tmp/chiptool-src --locked
 3. HC32 SVD 无 enumeratedValues，`enum/` 段暂为空；后续可用
    `chiptool transform`（`MakeRegisterArray`/`MergeEnums`）收敛寄存器版本号；
 4. HC32F155 的 DS 版式特殊，部分型号属性缺失；F120/M120 无 DS，官网行为主源；
-5. 各系列提取细节见各数据仓库 `data/csv/EXTRACTION_NOTES.md`。
+   A472 同缺内存布局（生成侧跳过，见上文明细）；
+5. SVD MODE 拆分实例（TIM0_MODE0/1/23 等）与设备头外设名（TIM0）的映射
+   待在 csv_to_yaml.py 里建立（建立前这些实例按缺版本降级）；
+6. `core.dma_channels`（DMA 控制器通道清单）未生成，待补每系列通道数表；
+7. 各系列提取细节见各数据仓库 `data/csv/EXTRACTION_NOTES.md`。

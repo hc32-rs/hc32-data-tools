@@ -1,0 +1,53 @@
+name: metapac nightly
+
+# 生成 hc32-metapac 并推送到 hc32-rs/hc32-metapac。
+# 需要在仓库 Settings → Secrets → Actions 配置 METAPAC_TOKEN：
+# 一个对 hc32-rs 组织有 repo 写权限的 PAT（classic repo scope 或
+# fine-grained: hc32-rs/hc32-metapac Contents: read+write）。
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    if: ${{ github.repository == 'hc32-rs/hc32-data-tools' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Use Rust stable
+        run: rustup default stable
+      - name: Clone data repos
+        run: |
+          git clone --depth 1 https://github.com/hc32-rs/hc32-ddl-data ../hc32-ddl-data
+          git clone --depth 1 https://github.com/hc32-rs/hc32-ll-data ../hc32-ll-data
+      - name: Generate
+        run: |
+          COMMIT=$(git rev-parse HEAD)
+          COMMIT_MESSAGE=$(git log -1 --pretty=%B)
+          echo "COMMIT=$COMMIT" >> "$GITHUB_ENV"
+          echo "COMMIT_MESSAGE=$COMMIT_MESSAGE" >> "$GITHUB_ENV"
+          ./d gen
+      - name: Push to hc32-rs/hc32-metapac
+        run: |
+          cd build/hc32-metapac
+          cp -v ../../LICENSE* .
+          git init
+          git checkout -b main
+          git add .
+          git config user.name "hc32-data-tools builder"
+          git config user.email "action@github.com"
+          git commit -m "hc32-rs/hc32-data-tools main $COMMIT" --allow-empty
+          git tag -a hc32-data-tools-$COMMIT -m "Generated from hc32-data-tools $COMMIT"
+          git push --force --tags "https://x-access-token:${{ secrets.METAPAC_TOKEN }}@github.com/hc32-rs/hc32-metapac.git" main
+      - name: Test generated crate
+        run: |
+          rustup target add thumbv6m-none-eabi thumbv7em-none-eabihf
+          cd build/hc32-metapac
+          cargo build --features pac,metadata,rt,memory-x,hc32f003c4pa --target thumbv6m-none-eabi
+          cargo build --features pac,metadata,rt,memory-x,hc32f460jcta --target thumbv7em-none-eabihf
+          cargo test --no-default-features --features metadata,hc32f003c4pa

@@ -1,0 +1,33 @@
+name: build
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust targets
+        run: |
+          rustup target add thumbv6m-none-eabi
+          rustup target add thumbv7em-none-eabihf
+      - name: Check crates
+        run: cargo check --workspace
+      - name: Serde round-trip over data repos
+        run: |
+          git clone --depth 1 https://github.com/hc32-rs/hc32-ddl-data ../hc32-ddl-data
+          git clone --depth 1 https://github.com/hc32-rs/hc32-ll-data ../hc32-ll-data
+          cargo test -p hc32-data-serde
+      - name: Generate
+        run: ./d gen
+      - name: Test metapac (M0+)
+        run: ./d test-metapac hc32f003c4pa thumbv6m-none-eabi
+      - name: Test metapac (M4F)
+        run: ./d test-metapac hc32f460jcta thumbv7em-none-eabihf

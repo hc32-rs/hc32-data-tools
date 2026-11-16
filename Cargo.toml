@@ -1,0 +1,9 @@
+[workspace]
+resolver = "2"
+members = [
+    "hc32-data-gen",
+    "hc32-data-serde",
+    "hc32-metapac-gen",
+    "hc32-data-macros",
+]
+exclude = ["build"]

@@ -1,0 +1,50 @@
+[package]
+name = "hc32-metapac"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/hc32-rs/hc32-metapac"
+homepage = "https://github.com/hc32-rs/hc32-data-tools"
+description = "Peripheral Access Crate (PAC) for all HC32 (XHSC / 小华半导体) MCU chips, including metadata."
+documentation = "https://docs.rs/hc32-metapac"
+categories = ["embedded", "no-std", "hardware-support"]
+keywords = ["xhsc", "hc32", "svd2rust", "no_std", "embedded"]
+readme = "README.md"
+
+# `cargo publish` is unable to figure out which .rs files are needed due to the include! magic.
+include = [
+    "**/*.rs",
+    "**/*.x",
+    "src/chips/**/memory_x/**",
+    "Cargo.toml",
+    "README.md",
+    "LICENSE-*",
+]
+
+[package.metadata.docs.rs]
+features = ["hc32f003c4pa", "pac", "metadata"]
+default-target = "thumbv6m-none-eabi"
+targets = []
+
+[dependencies]
+vcell = "0.1"
+
+[target.'cfg(target_arch = "arm")'.dependencies]
+cortex-m = "0.7"
+
+[features]
+default = ["pac"]
+
+# Build the actual PAC. Set by default.
+# If you just want the metadata, unset it with `default-features = false`.
+pac = []
+
+# Build the chip metadata.
+# If set, a const `hc32_metapac::METADATA` will be exported, containing all the
+# metadata for the currently selected chip.
+metadata = []
+
+rt = []
+memory-x = []
+
+# Chip-selection features
