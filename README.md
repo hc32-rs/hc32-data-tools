@@ -97,15 +97,14 @@ cargo install --path /tmp/chiptool-src --locked
 
 ### `data/registers/<kind>_<version>.yaml`（寄存器块）
 
-> 以下描述**当前生成链**。外设功能版本的新命名还在文档评审阶段，尚未接入生成器。
-> 拟议文件名为 `<kind>_ddl_vN[_M].rs` / `<kind>_ll_vN[_M].rs`，DDL、LL 独立编号，
-> 同档不同布局使用数字后缀。完整外设名恢复 I2C/I2S、TMR0/2/4 等被旧 kind 截断的名称。
-> 规则与范围见 [DDL 版本说明](../hc32-ddl-data/docs/layout-versions.md)和
-> [LL 版本说明](../hc32-ll-data/docs/layout-versions.md)。LL README 的 M4 扩展项本次排除。
+寄存器 YAML 与 PAC 使用统一文件主干：`<kind>_ddl_vN[_M]` / `<kind>_ll_vN[_M]`。
+DDL、LL 独立编号，同档不同布局使用数字后缀；内部主块使用完整外设名的大写形式。
+规则见 [DDL 版本说明](../hc32-ddl-data/docs/layout-versions.md)和
+[LL 版本说明](../hc32-ll-data/docs/layout-versions.md)。LL M4 扩展排除项保留原名。
 
 两仓库的 `docs/peripheral-version-map.json` 显式分配目标版本，
-`docs/peripheral-versions.csv` 列出系列/实例、当前来源及拟议目标文件。
-表中 `current_version` 是各数据仓库的版本，**不是**下游 `version_remaps` 临时分配的合并版本。
+`docs/peripheral-versions.csv` 列出系列/实例、当前来源及目标文件。
+表中 `current_version` 包含 ddl/ll 命名空间；`proposed_version` 列为兼容评审表保留，值为不带命名空间的功能版本。
 使用下面的独立文档导出命令（Python 3 + PyYAML），不运行 PAC 生成，不修改 `data/` 或 SVD：
 
 ```sh
@@ -118,7 +117,7 @@ python3 hc32-data-tools/scripts/export_peripheral_versions.py --check
 来源 SHA-256、实例覆盖、唯一目标、排除项、编号连续性或文档引用不一致时会报错。
 两仓库都通过校验后才写出。`--check` 只读，并检查产物是否需要更新。
 相同档位的变体附带相对基础布局的差异提示；没有检测出寄存器坐标/内联字段差异也不自动合并。
-文档及对照表确认后，才迁移数据合并与 metapac 生成链中的文件名、模块和元数据引用。
+命名已接入上游提取、系列 YAML、JSON、PAC 模块和元数据。旧标识仅在映射的 legacy_source 中留档。
 
 - **来源**：两仓库 `svd/*.svd`（来源为 SDK 内 SVD）。行尾由各仓库 `.gitattributes`
   统一管控：仓库内与检出均为 LF。
@@ -128,10 +127,9 @@ python3 hc32-data-tools/scripts/export_peripheral_versions.py --check
      脚本自动复制补丁副本到 `build/svd_fixed/`（原始 SVD 不动）再解析；
   2. chiptool 把每个 SVD 拆成每外设一个 IR YAML（`block/<外设>` + `fieldset/<寄存器>` 段，
      含 access/bit_size/数组），缓存在 `build/chiptool/<仓库>/<系列>/`；
-  3. 聚合器把全部系列的块按 `(kind, 布局签名)` 去重合并成
-     `<kind>_<version>.yaml`：一个布局若覆盖该 kind 出现的**全部**系列 → `common`，
-     否则按首次出现序 `v1、v2…`；布局代表取系列名排序最前者，`derivedFrom`
-     外设不单独产出（与父实例同布局）。
+  3. 按 `docs/peripheral-version-map.json` 的 active 映射输出规范名称和主块名，
+     校验完整实例集合、布局签名与 SHA-256。未知或变化的布局必须先复核映射，不能自动分配编号。
+     `derivedFrom` 继承其已确认来源，排除项维持原名称。所有校验完成后才写文件。
 - **产物**：`data/registers/<kind>_<version>.yaml` + `data/csv/register_versions.csv`
   （`series,instance,kind,version,block` 实例→版本映射，family YAML 引用它）。
 - **核对**：`svd_to_registers_csv.py` 产出实例级 `registers.csv` 作为核对基准；
@@ -189,8 +187,8 @@ python3 hc32-data-tools/scripts/export_peripheral_versions.py --check
 - **`hc32-data-gen`**：读**两个**数据仓库根（默认
   `ddl=../hc32-ddl-data/data:ll=../hc32-ll-data/data`，环境变量
   `HC32_DATA_ROOTS` 可覆盖），解析 include 链后产出 `build/data/*.json`。要点：
-  - 两仓库寄存器版本号各自独立编号；同名不同布局时按 DDL→LL 顺序确定性地
-    改派空闲版本号（`version_remaps`），芯片侧重定向，跨仓库布局一致则去重；
+  - 保留上游确定的规范名称，不再跨库改派版本号。重复文件名直接报错。
+    名称解析按 `_ddl_` / `_ll_` 分隔，支持外设名下划线及数字变体后缀；排除项兼容旧名称。
   - DMA 触发按 HC32 语义挂 `request` 号到外设（DDL=TRI_SEL 全局索引 /
     LL=EVT_SRC 事件号），不推断物理通道；信号名按“忽略下划线的最长前缀”
     匹配外设实例（`LP_UART0_RX`→`LPUART0`、`ADCJQR`→`ADC`）；
@@ -199,7 +197,8 @@ python3 hc32-data-tools/scripts/export_peripheral_versions.py --check
 - **`hc32-data-macros`**：`EnumDebug` derive（元数据 IR 的 Debug 输出用）。
 - **`hc32-metapac-gen`**：ARM-only（HC32 中断号已是 CMSIS 0 基，无需 ch32 的
   -16 调整）。同一芯片内同一外设 kind 允许多版本（MODE 拆分的定时器），
-  模块名统一 `<kind>_<version>`。每芯片生成 `pac.rs`（寄存器访问）、
+  模块名统一 `<kind>_<version>`，其中 version 包含 ddl/ll 命名空间。
+  全部寄存器布局都生成，包含尚未挂接到芯片的 MODE 视图；重生成前清除旧模块目录。每芯片生成 `pac.rs`（寄存器访问）、
   `metadata.rs`（`METADATA` 元数据）、`device.x`（中断向量）、`memory_x/`
   （memory.x 链接脚本素材）。
   chiptool 渲染结果是未排版的 proc-macro2 token 流，`./d gen` 末尾用

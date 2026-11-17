@@ -49,9 +49,29 @@ impl Gen {
     }
 
     pub fn gen(&mut self) {
-        fs::create_dir_all(self.opts.out_dir.join("src/peripherals")).unwrap();
-        fs::create_dir_all(self.opts.out_dir.join("src/registers")).unwrap();
-        fs::create_dir_all(self.opts.out_dir.join("src/chips")).unwrap();
+        // These directories are generator-owned. Remove old module names even when
+        // invoking this generator directly instead of the workflow wrapper.
+        for directory in ["src/peripherals", "src/registers", "src/chips"] {
+            let path = self.opts.out_dir.join(directory);
+            if path.exists() {
+                fs::remove_dir_all(&path).unwrap();
+            }
+            fs::create_dir_all(path).unwrap();
+        }
+        self.all_peripheral_versions.clear();
+        self.metadata_dedup.clear();
+        // Include reviewed layouts not yet referenced by chip metadata (MODE views).
+        for entry in fs::read_dir(self.opts.data_dir.join("registers")).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().and_then(|s| s.to_str()) != Some("json") {
+                continue;
+            }
+            let stem = path.file_stem().unwrap().to_str().unwrap();
+            let (kind, version) = hc32_data_serde::register_name::split_register_name(stem)
+                .unwrap_or_else(|| panic!("invalid register filename: {stem}"));
+            self.all_peripheral_versions
+                .insert((kind.to_owned(), version.to_owned()));
+        }
 
         let mut chip_core_names: Vec<String> = Vec::new();
 

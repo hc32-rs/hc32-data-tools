@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Export the reviewed peripheral naming proposal, without changing PAC input data.
+"""Export the reviewed peripheral names, without changing PAC input data.
 
 Assignments live in each data repository's docs/peripheral-version-map.json.
 This exporter never assigns numbers. Unknown layouts, changed inputs and collisions
@@ -113,7 +113,7 @@ def load_review(repo: Path, side: str) -> tuple[list[dict], list[dict]]:
     doc = json.loads((repo / 'docs/peripheral-version-map.json').read_text())
     require(doc['schema_version'] == 1 and doc['side'] == side,
             f'{repo}: unexpected proposal schema/side')
-    require(doc['stage'] == 'proposal-awaiting-confirmation',
+    require(doc['stage'] in ('proposal-awaiting-confirmation', 'active'),
             f'{repo}: proposal stage must be explicit')
     layouts = doc['layouts']
     with (repo / 'data/csv/register_versions.csv').open(newline='') as stream:
@@ -130,12 +130,18 @@ def load_review(repo: Path, side: str) -> tuple[list[dict], list[dict]]:
     used_sources = set()
     for layout in layouts:
         source = layout['source']
-        require(re.fullmatch(r'[a-z][a-z0-9_]*_(?:v\d+|common)', source) is not None,
+        require(re.fullmatch(r'[a-z][a-z0-9_]*_(?:(?:ddl|ll)_v[1-9]\d*(?:_[1-9]\d*)?|v\d+|common)', source) is not None,
                 f'unsafe source identifier: {source}')
         require(re.fullmatch(r'[a-z][a-z0-9_]*', layout['kind']) is not None,
                 f'invalid target kind: {layout["kind"]}')
         status, version = layout['status'], layout['version']
-        require(status in ('excluded', 'proposed'), f'{source}: invalid status')
+        require(status in ('excluded', 'proposed', 'active'), f'{source}: invalid status')
+        if status != 'excluded':
+            expected_status = 'active' if doc['stage'] == 'active' else 'proposed'
+            require(status == expected_status, f'{source}: status disagrees with map stage')
+        if status == 'active':
+            require(source == f"{layout['kind']}_{side}_{version}", f'{source}: noncanonical filename')
+            require(layout['block'] == layout['kind'].upper(), f'{source}: noncanonical block')
         require(bool(layout['rationale']), f'{source}: missing rationale')
         if status == 'excluded':
             require(version == '' and layout['tier'] == 0 and layout['topic'] is None,
@@ -155,10 +161,12 @@ def load_review(repo: Path, side: str) -> tuple[list[dict], list[dict]]:
             digest_cache[source] = hashlib.sha256(path.read_bytes()).hexdigest()
         require(digest_cache[source] == layout['source_sha256'],
                 f'{path}: source changed; review its assignment before exporting')
-        if status == 'proposed':
+        if status in ('proposed', 'active'):
             if source not in ir_cache:
                 ir_cache[source] = yaml.load(path.read_text(), Loader=getattr(yaml, 'CSafeLoader', yaml.SafeLoader))
             ir = ir_cache[source]
+            if status == 'active':
+                require(f"block/{layout['block']}" in ir, f'{source}: missing canonical block')
             registers = sum(len(v.get('items', [])) for k, v in ir.items() if k.startswith('block/'))
             fields = sum(len(v.get('fields', [])) for k, v in ir.items() if k.startswith('fieldset/'))
             require((registers, fields) == (layout['register_count'], layout['field_count']),
@@ -178,6 +186,8 @@ def load_review(repo: Path, side: str) -> tuple[list[dict], list[dict]]:
                 row = source_index[key]
                 require(f"{row['kind']}_{row['version']}" == source,
                         f'{key}: source mapping changed')
+                if 'block' in layout:
+                    require(row['block'] == layout['block'], f'{key}: block reference changed')
                 require(instance in svd_cache[series], f'{key}: missing from SVD')
                 require(is_excluded(side, series, instance) == (status == 'excluded'),
                         f'{key}: exclusion scope mismatch')
@@ -192,7 +202,7 @@ def load_review(repo: Path, side: str) -> tuple[list[dict], list[dict]]:
     for key, numbers in versions.items():
         require(numbers == set(range(max(numbers) + 1)), f'{key}: non-contiguous variants')
     base_layouts = {(e['kind'], e['tier']): e for e in layouts
-                    if e['status'] == 'proposed' and '_' not in e['version']}
+                    if e['status'] in ('proposed', 'active') and '_' not in e['version']}
     for layout in layouts:
         if layout['status'] == 'excluded':
             layout['detail'] = ''
@@ -205,7 +215,7 @@ def load_review(repo: Path, side: str) -> tuple[list[dict], list[dict]]:
     for key, old in source_index.items():
         layout = assigned[key]
         notes = f"source=data/registers/{layout['source']}.yaml; target_kind={layout['kind']}; {layout['rationale']}"
-        if layout['status'] == 'proposed':
+        if layout['status'] in ('proposed', 'active'):
             notes += f"; {layout['detail']}; evidence=docs/explore/{layout['topic']}.md"
         if old['instance'] == 'EMB_CTL1':
             notes += '; SVD 零基址附属节点，非有效硬件实例确认'
@@ -239,7 +249,7 @@ def topic_table(side: str, layouts: list[dict], topic: str) -> str:
     for layout in layouts:
         if layout['topic'] == topic:
             groups[(layout['kind'], layout['tier'])].append(layout)
-    lines = ['## 版本与系列对照', '', '以下为待确认命名，当前来源仍使用旧文件名。系列名前缀 `HC32` 省略。', '']
+    lines = ['## 版本与系列对照', '', '以下名称与生成输入保持一致。系列名前缀 `HC32` 省略。', '']
     for (kind, number), entries in sorted(groups.items()):
         entries.sort(key=lambda e: version_key(e['version']))
         lines += [f'### {kind}：v{number}', '', '；'.join(dict.fromkeys(e['rationale'] for e in entries)) + '。', '',
@@ -252,13 +262,13 @@ def topic_table(side: str, layouts: list[dict], topic: str) -> str:
 
 
 def summary_table(side: str, layouts: list[dict], rows: list[dict]) -> str:
-    included = [e for e in layouts if e['status'] == 'proposed']
+    included = [e for e in layouts if e['status'] in ('proposed', 'active')]
     groups = defaultdict(list)
     for e in included:
         groups[e['kind']].append(e)
     excluded_rows = sum(r['status'] == 'excluded' for r in rows)
     lines = ['## 覆盖统计', '',
-             f"共 {len(rows)} 个系列/实例映射：{len(rows)-excluded_rows} 个待确认、{excluded_rows} 个排除。",
+             f"共 {len(rows)} 个系列/实例映射：{len(rows)-excluded_rows} 个已分配、{excluded_rows} 个排除。",
              f"纳入 {len(groups)} 个目标外设名、{len(included)} 个独立生成布局。", '',
              '| 外设 | 主档位 | 布局数 | 功能依据 |', '|---|---|---:|---|']
     for kind, es in sorted(groups.items()):
@@ -283,7 +293,7 @@ def replace_block(text: str, generated: str) -> str:
 
 
 def validate_docs(repo: Path, side: str, layouts: list[dict], outputs: dict[Path, str]) -> None:
-    targets = {target_file(side, e).removesuffix('.rs') for e in layouts if e['status'] == 'proposed'}
+    targets = {target_file(side, e).removesuffix('.rs') for e in layouts if e['status'] in ('proposed', 'active')}
     docs = [repo / 'README.md', *sorted((repo / 'docs').rglob('*.md'))]
     for path in docs:
         text = outputs.get(path, path.read_text())
@@ -309,6 +319,7 @@ def render(repo: Path, side: str) -> tuple[dict[Path, str], dict]:
         outputs[path] = replace_block(path.read_text(), topic_table(side, layouts, topic))
     validate_docs(repo, side, layouts, outputs)
     return outputs, {'side': side, 'instances': len(rows), 'layouts': len(layouts),
+                     'active': sum(r['status'] == 'active' for r in rows),
                      'proposed': sum(r['status'] == 'proposed' for r in rows),
                      'excluded': sum(r['status'] == 'excluded' for r in rows)}
 

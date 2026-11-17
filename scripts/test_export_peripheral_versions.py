@@ -47,6 +47,35 @@ class ReviewTests(unittest.TestCase):
         self.assertEqual({r['instance'] for r in rows}, {'I2C0', 'I2S0'})
         self.assertEqual(export.csv_text(rows), export.csv_text(self.load()[1]))
 
+    def activate_fixture(self):
+        rows = ['series,instance,kind,version,block']
+        self.proposal['stage'] = 'active'
+        for entry in self.proposal['layouts']:
+            old = self.repo / f"data/registers/{entry['source']}.yaml"
+            content = old.read_text().replace('block/I:', f"block/{entry['kind'].upper()}:")
+            old.unlink()
+            entry.update(source=f"{entry['kind']}_ddl_v1", status='active', block=entry['kind'].upper(),
+                         source_sha256=hashlib.sha256(content.encode()).hexdigest())
+            (self.repo / f"data/registers/{entry['source']}.yaml").write_text(content)
+            instance = entry['instances']['HC32TEST'][0]
+            rows.append(f"HC32TEST,{instance},{entry['kind']},ddl_v1,{entry['block']}")
+        (self.repo / 'data/csv/register_versions.csv').write_text('\n'.join(rows) + '\n')
+        self.save()
+
+    def test_active_names_and_internal_blocks(self):
+        self.activate_fixture()
+        _, rows = self.load()
+        self.assertEqual({r['status'] for r in rows}, {'active'})
+        self.assertEqual({r['current_version'] for r in rows}, {'ddl_v1'})
+        self.assertTrue(all('evidence=' in r['notes'] for r in rows))
+
+    def test_active_mapping_rejects_old_block_names(self):
+        self.activate_fixture()
+        self.proposal['layouts'][0]['block'] = 'I'
+        self.save()
+        with self.assertRaisesRegex(ValueError, 'noncanonical block'):
+            self.load()
+
     def test_changed_source_requires_review(self):
         with (self.repo / 'data/registers/i_v1.yaml').open('a') as stream:
             stream.write('# source changed\n')

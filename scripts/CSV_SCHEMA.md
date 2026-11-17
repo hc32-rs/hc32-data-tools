@@ -102,23 +102,23 @@ series,flash_base,sram_base,sram_hi_base,notes
 - dma.csv 的 request 名必须去重且 channel 在合法范围。
 - peripherals.csv 每个系列实例数应接近 SVD 顶层 peripheral 数。
 
-## 文档评审用外设版本对照
+## 外设版本对照
 
-两数据仓库的 `docs/peripheral-versions.csv` 是独立于 `data/csv/` 审计层的命名提案，
+两数据仓库的 `docs/peripheral-versions.csv` 是独立于 `data/csv/` 审计层的当前命名对照，
 由 `export_peripheral_versions.py` 读取 `docs/peripheral-version-map.json` 导出。
-生成器尚不消费该提案。每行唯一键为 `(series, instance)`，含模式视图和派生实例。
+生成器消费同一份已启用的显式映射。每行唯一键为 `(series, instance)`，含模式视图和派生实例。
 
 | 列 | 含义 |
 |---|---|
 | series | MCU 系列，保留 HC32 前缀；不展开到封装料号 |
 | instance | SVD 实例名，保留 MODE 和共享窗口后缀 |
-| kind | 现有 `data/csv/register_versions.csv` 的 kind，可能是 i、tmr 等旧标识 |
+| kind | 现有 `data/csv/register_versions.csv` 的 kind，纳入范围使用完整外设名 |
 | current_version | 该数据仓库内的当前版本；不包含下游跨仓库冲突重映射 |
-| proposed_version | 独立分配的 vN 或 vN_M，排除项留空 |
+| proposed_version | 功能版本 vN 或 vN_M（为兼容保留列名），排除项留空 |
 | target_file | 完整目标名 `<kind>_ddl_vN[_M].rs` / `<kind>_ll_vN[_M].rs`，排除项留空 |
-| status | proposed：待确认；excluded：LL M4 扩展范围，本次不整理 |
+| status | active：已启用；excluded：LL M4 扩展范围，本次不整理 |
 | notes | 来源 YAML、完整目标 kind、功能依据、同档差异提示和专题证据路径 |
 
-文件为 UTF-8、LF。导出按旧 kind、新版本数字顺序、目标文件、系列及实例排序。
+文件为 UTF-8、LF。导出按当前 kind、新版本数字顺序、目标文件、系列及实例排序。
 同一目标文件只对应一个显式布局记录；同布局的不同实例共享目标文件。
 版本分配及来源校验信息在 JSON 中维护，禁止仅修改导出的 CSV 或标记文档表格。

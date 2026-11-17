@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 pub mod chip;
+pub mod register_name;
 mod resolve;
 mod size;
 pub use size::{deserialize_opt_size_with_suffix, parse_size_with_suffix};

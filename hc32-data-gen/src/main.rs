@@ -168,25 +168,16 @@ fn main() -> anyhow::Result<()> {
                     }
                 }
 
-                // 寄存器版本号按数据根重定向（跨仓库同名冲突时改派新号）；
-                // 挂不上版本的（SVD/设备头实例名不一致，如 TIM0_MODE0 vs TIM0）
-                // 降级为纯地址外设并告警
+                // Names are assigned upstream; unresolved instances retain the existing address-only fallback.
                 for p in &mut core.peripherals {
                     let Some(regs) = &mut p.registers else {
                         continue;
                     };
-                    let Some(version) = regs.version.clone() else {
+                    let Some(_version) = regs.version.as_ref() else {
                         no_version.push(format!("{} {} ({})", name, p.name, regs.kind));
                         p.registers = None;
                         continue;
                     };
-                    if let Some(new_version) = registers.version_remaps.get(&(
-                        root.label.clone(),
-                        regs.kind.clone(),
-                        version,
-                    )) {
-                        regs.version = Some(new_version.clone());
-                    }
                 }
             }
 

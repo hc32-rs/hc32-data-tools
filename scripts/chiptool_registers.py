@@ -4,8 +4,8 @@ r"""用 chiptool 生成两仓库的 data/registers/。
 流程：
 1. 对每个 SVD 跑 `chiptool extract-all`（老代 SVD 缺 <addressBlock><usage>，
    自动修补副本到 build/svd_fixed/，原始 SVD 不动），原始 IR 输出到 build/chiptool/；
-2. 按 (kind, 布局签名) 把各系列的 chiptool 块聚合成 data/registers/<kind>_<version>.yaml：
-   覆盖该 kind 全部系列的布局 → common，否则按首次出现序 v1、v2…（与旧规则一致）；
+2. 按 docs/peripheral-version-map.json 的已确认映射生成规范命名 YAML；
+   校验实例、布局与来源摘要，未知布局报错，不再按遍历顺序编号；
 3. 产 data/csv/register_versions.csv（series,instance,kind,version,block），
    供 csv_to_yaml.py 生成 family YAML 的 registers 引用；derivedFrom 外设继承
    父实例的版本。
@@ -16,11 +16,12 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
+import json
 import re
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
-from collections import defaultdict
 from pathlib import Path
 
 import yaml
@@ -157,11 +158,6 @@ def signature(ir: dict) -> tuple:
     return tuple(parts)
 
 
-def kind_of(instance: str) -> str:
-    m = re.match(r"[A-Za-z]+", instance)
-    return m.group(0).lower() if m else instance.lower()
-
-
 def load_series_ir(raw_dir: Path) -> dict[str, dict]:
     """{instance: IR}（实例名 = 文件名主段）。"""
     out = {}
@@ -198,79 +194,66 @@ def process_repo(repo: Path, work: Path, fixed: Path) -> dict:
 
     series_ir: dict[str, dict[str, dict]] = {}
     series_derived: dict[str, dict[str, str]] = {}
-    series_list = []
     for svd in sorted(svd_dir.glob("*.svd")):
         s = svd.stem
-        series_list.append(s)
         raw = work / repo.name / s
         if not extract(svd, raw, fixed):
             continue
         series_ir[s] = load_series_ir(raw)
         series_derived[s] = resolve_derived(svd_peripherals(svd))
 
-    # (kind, signature) → {series}; 记每系列实例 → signature
-    groups: dict[tuple[str, tuple], set[str]] = defaultdict(set)
-    inst_sig: dict[tuple[str, str], tuple] = {}
-    inst_kind: dict[tuple[str, str], str] = {}
-    for s in series_list:
-        for inst, ir in series_ir.get(s, {}).items():
-            k = kind_of(inst)
-            sig = signature(ir)
-            groups[(k, sig)].add(s)
-            inst_sig[(s, inst)] = sig
-            inst_kind[(s, inst)] = k
-
-    kind_series: dict[str, set[str]] = defaultdict(set)
-    for (k, _), ss in groups.items():
-        kind_series[k] |= ss
-
-    # 版本号：common / vN（按系列名首次出现序）
-    gv: dict[tuple[str, tuple], str] = {}
-    counters: dict[str, int] = {}
-    first_series = {g: min(ss) for g, ss in groups.items()}
-    for g in sorted(groups, key=lambda g: (g[0], first_series[g], g[1])):
-        k = g[0]
-        if groups[g] == kind_series[k]:
-            gv[g] = "common"
-        else:
-            counters[k] = counters.get(k, 0) + 1
-            gv[g] = f"v{counters[k]}"
-
-    # 代表系列 → 输出文件
-    reps: dict[tuple[str, str], tuple[str, str]] = {}
-    for (s, inst), sig in inst_sig.items():
-        k = inst_kind[(s, inst)]
-        key = (k, gv[(k, sig)])
-        if key not in reps or (s, inst) < reps[key]:
-            reps[key] = (s, inst)
-
-    # 清空旧 registers/（避免残留非 chiptool 文件）
-    for old in out_reg.glob("*.yaml"):
-        old.unlink()
-
-    n_files = 0
-    for (k, ver), (s, inst) in sorted(reps.items()):
-        ir = rename_block(series_ir[s][inst], k)
-        sig = next(sig for (kk, sig) in groups if kk == k and gv[(kk, sig)] == ver)
-        cover = ", ".join(sorted(groups[(k, sig)]))
+    # Approved manifest is authoritative: never allocate numbers from traversal order.
+    manifest_path = repo / "docs" / "peripheral-version-map.json"
+    manifest = json.loads(manifest_path.read_text())
+    if manifest["stage"] != "active":
+        raise ValueError("Activate the reviewed peripheral version map before generation")
+    side = manifest["side"]
+    expected = {(s, inst) for s, parents in series_derived.items()
+                for inst, parent in parents.items() if parent in series_ir.get(s, {})}
+    covered = set()
+    outputs = {}
+    for layout in manifest["layouts"]:
+        members = [(s, inst) for s, names in layout["instances"].items() for inst in names]
+        candidates = set()
+        for key in members:
+            if key not in expected or key in covered:
+                raise ValueError(f"Missing/duplicate reviewed instance: {key}")
+            covered.add(key)
+            s, inst = key
+            candidates.add((s, series_derived[s][inst]))
+        s, inst = min(candidates)
+        block = layout["block"]
+        ir = rename_block(series_ir[s][inst], block)
+        sig = signature(ir)
+        for ss, ii in candidates:
+            if signature(rename_block(series_ir[ss][ii], block)) != sig:
+                raise ValueError(f"Layout drift: {layout['source']} / {ss}/{ii}; review mapping")
+        cover = ", ".join(sorted({ss for ss, _ in members}))
         header = (f"# 由 chiptool extract-all 生成（hc32-data-tools/chiptool_registers.py）。\n"
                   f"# 布局代表：{s}/{inst}；覆盖系列：{cover}。\n")
-        (out_reg / f"{k}_{ver}.yaml").write_text(header + yaml.dump(
-            ir, allow_unicode=True, sort_keys=False, default_flow_style=False,
-            width=100), encoding="utf-8")
-        n_files += 1
-
-    # register_versions.csv：全部实例（derived → 父）
-    for s in series_list:
-        for inst, parent in series_derived.get(s, {}).items():
-            pkey = (s, parent)
-            if pkey in inst_kind:
-                k = inst_kind[pkey]
-                ver = gv[(k, inst_sig[pkey])]
-            else:
-                k, ver = kind_of(inst), ""
-            rows.append({"series": s, "instance": inst, "kind": k,
-                         "version": ver, "block": k.upper()})
+        content = header + yaml.dump(ir, allow_unicode=True, sort_keys=False,
+                                    default_flow_style=False, width=100)
+        if hashlib.sha256(content.encode()).hexdigest() != layout["source_sha256"]:
+            raise ValueError(f"Source changed for {layout['source']}; review manifest digest")
+        if layout["source"] in outputs:
+            raise ValueError(f"Duplicate output: {layout['source']}")
+        outputs[layout["source"]] = content
+        if layout["status"] == "excluded":
+            kind, version = layout["source"].rsplit("_", 1)
+        else:
+            kind, version = layout["kind"], f"{side}_{layout['version']}"
+        for ss, ii in members:
+            rows.append({"series": ss, "instance": ii, "kind": kind,
+                         "version": version, "block": block})
+    if expected != covered:
+        raise ValueError(f"Unreviewed instances: {sorted(expected - covered)}")
+    # All input validation precedes mutations; remove only obsolete register YAMLs.
+    for old in out_reg.glob("*.yaml"):
+        if old.stem not in outputs:
+            old.unlink()
+    for stem, content in outputs.items():
+        (out_reg / f"{stem}.yaml").write_text(content, encoding="utf-8")
+    n_files = len(outputs)
     rows.sort(key=lambda r: (r["series"], r["instance"]))
     with open(repo / "data" / "csv" / "register_versions.csv", "w", newline="",
               encoding="utf-8") as f:
