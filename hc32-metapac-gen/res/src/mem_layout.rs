@@ -1,5 +1,6 @@
 // Always-available memory geometry. Exposed per chip as `MEMORY_LAYOUT` at the
-// crate root. HC32 regions are named FLASH / SRAM after the XHSC manuals.
+// crate root. HC32 regions are named FLASH / SRAM after the XHSC manuals;
+// independent retention RAM banks follow the SDK linker names RAMB / RET_RAM.
 
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
 pub struct MemoryLayout {

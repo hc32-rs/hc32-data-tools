@@ -10,6 +10,20 @@ pub struct Registers {
     pub block: String,
 }
 
+/// MODE 拆分定时器的一个 SVD 寄存器视图（TIM0_MODE0/1/23、ATIM0MODE0/1/23）。
+/// 多视图实例走 `views` 列表（物理身份在外设项上，每视图挂自己的寄存器版本）；
+/// 单视图实例仍用 `registers`，两者互斥。
+#[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct RegisterView {
+    /// SVD 视图原名（= register_versions.csv / peripheral-version-map.json 的实例键）。
+    pub name: String,
+    /// 视图对应的工作模式档位：MODE0 / MODE1 / MODE23。
+    pub mode: String,
+    pub kind: String,
+    pub version: String,
+    pub block: String,
+}
+
 /// HC32 的时钟门控：PWC/FCG 外设时钟使能寄存器的某一位
 /// （如 PERI_CLKEN 的 SysctrlPeripheralAdcBgr）。无独立 kernel_clock/reset 概念。
 #[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd, Ord, Serialize, Deserialize)]

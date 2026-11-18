@@ -49,7 +49,11 @@ INT_HEADER = ["series", "name", "irq", "description"]
 DMA_HEADER = ["series", "dma", "channel", "request", "trigger_id"]
 PERI_HEADER = ["series", "instance", "kind", "base_address", "bus", "fcg_reg",
                "fcg_field", "interrupts", "notes"]
-MEM_HEADER = ["series", "flash_base", "sram_base", "sram_hi_base", "notes"]
+# sram_kb/extra_regions 见 CSV_SCHEMA.md：主 SRAM 大小与独立保留区
+# （RAMB/RET_RAM 等）分列，DS 标称的 sram_kb 是否并入保留区因系列而异，
+# 故一律以链接脚本/RM 内存映射表为准（旧列 sram_hi_base 系误认地址别名，已废弃）
+MEM_HEADER = ["series", "flash_base", "sram_base", "sram_kb", "extra_regions",
+               "notes"]
 
 # EVT_SRC 中不能作为 DMA 触发源的事件（RM 表"可否选择为内部触发源"为 "-"）
 DMA_EXCLUDE_PAT = re.compile(
@@ -378,20 +382,22 @@ def extract_fcg(sdk_root, sdk_dir):
 def extract_peripherals(series, svd_path, fcg):
     tree = ET.parse(svd_path)
     peris = tree.getroot().findall("peripherals/peripheral")
-    base_by_name = {}
+    by_name = {(p.findtext("name") or "").strip(): p for p in peris}
+
+    def base_address(p, seen):
+        base = (p.findtext("baseAddress") or "").strip()
+        if base:
+            return "0x%08X" % int(base, 0)
+        parent = p.get("derivedFrom")
+        if parent not in by_name or parent in seen:
+            raise ValueError(f"{series}: cannot resolve base address for {p.findtext('name')}")
+        return base_address(by_name[parent], seen | {parent})
+
     rows = []
     for p in peris:
         name = (p.findtext("name") or "").strip()
-        base = (p.findtext("baseAddress") or "").strip()
+        base = base_address(p, {name})
         deriv = p.get("derivedFrom")
-        if deriv and deriv in base_by_name:
-            base = base_by_name[deriv]
-        if base:
-            try:
-                base = "0x%08X" % int(base, 0)
-            except ValueError:
-                pass
-        base_by_name[name] = base
         ints = []
         for it in p.findall("interrupt"):
             iname = (it.findtext("name") or "").strip()
@@ -458,36 +464,43 @@ def parse_linker(sdk_root, sdk_dir):
     return best
 
 
-def extract_memory(series, dev_text, sdk_root, sdk_dir):
+def extract_memory(series, sdk_root, sdk_dir):
     flash, regions, fname = parse_linker(sdk_root, sdk_dir)
-    sram = None
-    m = re.search(r"#define\s+SRAM_BASE\s+\(?(0x[0-9A-Fa-f]+)", dev_text)
-    if m:
-        sram = int(m.group(1), 16)
+    # 主 SRAM 以链接脚本 RAM 区为准：设备头 SRAM_BASE 是系列级别名基址
+    # （如 M441 头写 0x1FFF8000，实际 32K 主区从 0x1FFFC000 起），
+    # 且跨 0x20000000 的主区是 SRAMH/SRAM0 两个物理 bank（RM 内存映射表），
+    # 并非地址别名，故不再用 SRAM_BASE 覆盖链接脚本基址。
     ram_region = next((r for r in regions
                        if r[0].upper().startswith("RAM")
-                       and "RET" not in r[0].upper()), None)
-    if sram is None and ram_region:
-        sram = ram_region[1]
+                       and "RET" not in r[0].upper()
+                       and "RAMB" != r[0].upper()), None)
+    sram = ram_region[1] if ram_region else None
     fb = "%#010x" % flash[1] if flash else "0x00000000"
     sb = "%#010x" % sram if sram is not None else ""
-    hi = ""
+    skb = ""
+    if ram_region is not None:
+        kb = ram_region[2]
+        skb = "%d" % int(kb) if kb == int(kb) else "%g" % kb
+    # 独立保留区（RAMB/RET_RAM）：链接脚本中与主区地址不连续的独立 RAM bank，
+    # 语义为掉电保持 SRAM（RM 表，非主区的一部分，也非地址别名）
+    extras = []
+    if ram_region is not None:
+        main_end = ram_region[1] + int(ram_region[2] * 1024)
+        for name, origin, kb in regions:
+            if name.upper() not in ("RAMB", "RET_RAM"):
+                continue
+            if origin < main_end and ram_region[1] < origin + int(kb * 1024):
+                continue
+            kb_s = "%d" % int(kb) if kb == int(kb) else "%g" % kb
+            extras.append("%s@%#x/%sK" % (name, origin, kb_s))
     notes = []
     if fname:
         notes.append("linker " + fname)
-    if sram is not None and ram_region:
-        end = ram_region[1] + int(ram_region[2]) * 1024
-        if sram < 0x20000000 <= end:
-            hi = "0x20000000"
-            notes.append("SRAM 别名区 0x20000000 起")
-    extra = []
-    used = {sram, int(hi, 16) if hi else None}
-    for name, origin, kb in regions:
-        if name.upper().startswith(("RAM", "RET")) and origin not in used:
-            extra.append("%s %#x %gK" % (name, origin, kb))
-    if extra:
-        notes.append("; ".join(extra))
-    return [series, fb, sb, hi, "; ".join(notes)]
+    if ram_region is not None and \
+            ram_region[1] < 0x20000000 < main_end:
+        notes.append("主区跨 0x20000000 = SRAMH/SRAM0 两个物理 bank"
+                     "（见 RM 内存映射表），非地址别名")
+    return [series, fb, sb, skb, ";".join(extras), "; ".join(notes)]
 
 
 # --------------------------------------------------------------------------
@@ -1102,9 +1115,11 @@ def svd_data(svd_path):
 # --------------------------------------------------------------------------
 
 def write_csv(out_dir, name, header, rows):
+    # lineterminator="\n"：仓库行尾策略为全 LF（.gitattributes），
+    # csv 模块默认 CRLF 会污染工作区 diff。
     path = os.path.join(out_dir, name)
     with open(path, "w", newline="", encoding="utf-8") as f:
-        w = csv.writer(f)
+        w = csv.writer(f, lineterminator="\n")
         w.writerow(header)
         w.writerows(rows)
     return path, len(rows)
@@ -1162,7 +1177,7 @@ HC32F175 已暂停支持（IP 多代缝合，见 hc32-data-tools/scripts/support
   （0x40~0x55，即十进制 64~85，写通道 CONFA0.TRISEL）。
 - 排除了 RM 表 10-2 中"不可选择为内部触发源"的事件：`*_ERR`、`*_PEERR`、
   `*_COLERR`、软件中断 `*_SWI_IRQ`；DMA 自身 TC/BTC 事件按 RM 可作触发源，保留；
-- 通道数取自 `hc32_ll_aos.h` 的 `AOS_DMA<x>_<n>` 宏（每单元 4 或 8 通道），
+- 通道数取自 `hc32_ll_aos.h` 的 `AOS_DMA<x>_<n>` 宏（按控制器记录），
   DMA 实例名取自 SVD；F115/F120 无 DMA 外设，dma 行数为 0。
 - 例外（已暂停支持的 F175，旧式外设集，仅作 SDK 语义记录）：无 AOS/EVT_SRC，
   DMAC 用固定请求编号——`DMA_<信号>_REQ = (0xNN << DMAC_CONFA0_TRISEL_POS)`
@@ -1178,13 +1193,17 @@ HC32F175 已暂停支持（IP 多代缝合，见 hc32-data-tools/scripts/support
   interrupts 列对这些系列留空。SVD 中断节点数>0 的系列（F334/F336/F431/M413/
   K116/K118/M458/F472/A472）用 SVD 补充 description，peripherals 的 interrupts
   列填 SVD 外设节点下的中断源名。
-- peripherals.csv：地址取自 `hc32-ll-data/svd/*.svd`（派生外设继承 baseAddress）；
+- peripherals.csv：地址取自 `hc32-ll-data/svd/*.svd`（缺少显式 baseAddress 的派生外设才继承父实例地址）；
   FCG 门控取自 `hc32_ll_fcg.h` 的 `FCG<n>_PERIPH_<实例>` 宏映射到的位宏
   （`PWC_FCG*_*` / `CMU_FCG_*` / F175 的 `SYSCTRL_APBEN*_*`），fcg_reg 填 FCG0~3，
   fcg_field 填实际位宏名。GPIO/CMU/RMU 等常开模块无门控，留空。
 - memory.csv：flash_base 取 GCC/IAR 链接脚本 FLASH 区起点（均为 0x00000000）；
-  sram_base 取设备头 `SRAM_BASE`，缺省回退链接脚本 RAM 区；sram_hi_base 在主 RAM
-  区跨 0x20000000 别名区时填 0x20000000（SRAMH 之后），独立保留区记入 notes。
+  sram_base/sram_kb 取链接脚本主 RAM 区（设备头 `SRAM_BASE` 是系列级别名基址，
+  如 M441 头写 0x1FFF8000 而实际主区从 0x1FFFC000 起，故不再用它覆盖链接脚本）；
+  extra_regions 列出与主区地址不连续的独立保留区（RAMB/RET_RAM，掉电保持 SRAM，
+  如 0x200F0000 4K），格式 `名称@地址/大小K`，分号分隔。主区跨 0x20000000 是
+  SRAMH/SRAM0 两个物理 bank 的边界（见各 RM 内存映射表），不是地址别名，
+  因此不再输出 sram_hi_base 伪别名列。
 - chips.csv：解析 DS PDF 订购信息/型号功能对比表。F120、M120 的 SDK 无 DS
   （仅 RM，RM 无型号表），各留一行占位并在 other 标注。HC32F155 订购页版式打散，
   只按两行配对恢复出型号名+封装+主频回退，其余属性列为空。F472/A472/F467/F4A2/
@@ -1306,7 +1325,7 @@ def main():
 
             # memory
             try:
-                all_mem.append(extract_memory(series, dev_text, args.sdk_root,
+                all_mem.append(extract_memory(series, args.sdk_root,
                                               sdk))
             except Exception as e:
                 warns.append("memory 失败: %s" % e)

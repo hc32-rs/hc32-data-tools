@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Write as _;
 use std::fs;
 use std::fs::File;
@@ -10,12 +10,17 @@ use regex::Regex;
 
 use crate::data::{Chip, Core};
 use crate::memory::gen_memory_files;
-use crate::{gen_opts, stringify, Gen};
+use crate::{Gen, gen_opts, stringify};
 
 fn build_chiptool_ir(
     core: &Core,
     core_index: usize,
-) -> (ir::IR, BTreeSet<(String, String)>, String) {
+) -> (
+    ir::IR,
+    BTreeSet<(String, String)>,
+    String,
+    BTreeMap<String, String>,
+) {
     let mut ir = ir::IR::new();
 
     let mut dev = ir::Device {
@@ -24,11 +29,49 @@ fn build_chiptool_ir(
         nvic_priority_bits: None, // FIXME: not extracted for hc32 yet
     };
 
-    // (kind, version) 对：同一芯片内同一 kind 允许多版本（如 MODE 拆分的定时器），
+    // (kind, version) 对：同一芯片内同一外设 kind 允许多版本（如 MODE 拆分的定时器），
     // 模块名统一用 `<kind>_<version>` 避免冲突。
     let mut peripheral_versions: BTreeSet<(String, String)> = BTreeSet::new();
 
+    // MODE 视图 const 的 doc 文本（视图名 → 模式切换约束说明），postprocess 注入。
+    let mut view_docs: BTreeMap<String, String> = BTreeMap::new();
+
     for p in &core.peripherals {
+        if !p.views.is_empty() {
+            // MODE 拆分定时器：每视图一条同基址类型化 IR 外设（const 名 = SVD 视图名），
+            // 每个视图提供类型化入口，同时保留原物理实例的 PAC 地址常量。
+            for v in &p.views {
+                peripheral_versions.insert((v.registers.kind.clone(), v.registers.version.clone()));
+                let ir_peri = ir::Peripheral {
+                    name: v.name.clone(),
+                    array: None,
+                    base_address: p.address,
+                    block: Some(format!(
+                        "{}_{}::{}",
+                        v.registers.kind, v.registers.version, v.registers.block
+                    )),
+                    description: None,
+                    interrupts: std::collections::BTreeMap::new(),
+                };
+                dev.peripherals.push(ir_peri);
+                view_docs.insert(
+                    v.name.clone(),
+                    format!(
+                        "Register-layout view `{v_name}` of physical timer `{p_name}` \
+                         (mode {v_mode}, same base address).\n\
+                         All MODE views alias the same physical timer: the working mode is \
+                         selected at runtime via the control register MD bit-field, and the \
+                         address, clock gate and interrupts are shared with `{p_name}`.\n\
+                         Use the view that matches the mode you configured; do not access \
+                         two views of the same timer concurrently.",
+                        v_name = v.name,
+                        p_name = p.name,
+                        v_mode = v.mode,
+                    ),
+                );
+            }
+        }
+
         let mut ir_peri = ir::Peripheral {
             name: p.name.clone(),
             array: None,
@@ -77,7 +120,21 @@ fn build_chiptool_ir(
     )
     .unwrap();
 
-    (ir, peripheral_versions, extra)
+    // (ir, peripheral_versions, extra, view_docs) 4 元组：视图 doc 由 gen_chip 注入。
+    (ir, peripheral_versions, extra, view_docs)
+}
+
+/// 把视图 doc 文本注入 pac.rs：在 `pub const <VIEW> :` 前插入 `#[doc = "..."]`。
+/// chiptool 不渲染外设 description 为 doc，故在此后处理。
+fn inject_view_docs(pac: String, view_docs: &BTreeMap<String, String>) -> String {
+    let mut out = pac;
+    for (name, doc) in view_docs {
+        let pat = format!("pub const {} :", name);
+        let esc = doc.replace('\\', "\\\\").replace('"', "\\\"");
+        let replacement = format!("#[doc = \"{}\"] {}", esc, pat);
+        out = out.replace(&pat, &replacement);
+    }
+    out
 }
 
 fn postprocess_pac_rs(s: String) -> String {
@@ -161,7 +218,7 @@ impl Gen {
         core: &Core,
         core_index: usize,
     ) {
-        let (mut ir, peripheral_versions, extra) = build_chiptool_ir(core, core_index);
+        let (mut ir, peripheral_versions, extra, view_docs) = build_chiptool_ir(core, core_index);
 
         for (module, version) in &peripheral_versions {
             self.all_peripheral_versions
@@ -181,7 +238,8 @@ impl Gen {
 
         // pac.rs
         let rendered = generate::render(&ir, &gen_opts()).unwrap().to_string();
-        let pac = postprocess_pac_rs(rendered);
+        let mut pac = postprocess_pac_rs(rendered);
+        pac = inject_view_docs(pac, &view_docs);
         let mut file = File::create(chip_dir.join("pac.rs")).unwrap();
         file.write_all(pac.as_bytes()).unwrap();
         file.write_all(extra.as_bytes()).unwrap();

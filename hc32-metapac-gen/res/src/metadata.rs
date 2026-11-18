@@ -144,6 +144,8 @@ pub struct Peripheral {
     pub name: &'static str,
     pub address: u64,
     pub registers: Option<PeripheralRegisters>,
+    /// MODE 拆分定时器的 SVD 视图（同基址布局叠影；与 `registers` 互斥）。
+    pub views: &'static [PeripheralView],
     pub rcc: Option<PeripheralRcc>,
     pub pins: &'static [PeripheralPin],
     pub dma_channels: &'static [PeripheralDmaChannel],
@@ -156,6 +158,17 @@ pub struct PeripheralRegisters {
     pub version: &'static str,
     pub block: &'static str,
     pub ir: &'static ir::IR,
+}
+
+/// MODE 拆分定时器的一个 SVD 视图：工作模式由控制寄存器 MD 位运行时选择，
+/// 地址/时钟门/中断与物理实例共用（见 Peripheral::name）。
+#[derive(Debug, Eq, PartialEq, Clone)]
+pub struct PeripheralView {
+    /// SVD 视图原名（与 PAC 侧 `pub const` 同名）。
+    pub name: &'static str,
+    /// 工作模式档位：MODE0 / MODE1 / MODE23。
+    pub mode: &'static str,
+    pub registers: PeripheralRegisters,
 }
 
 #[derive(Debug, Eq, PartialEq, Clone)]

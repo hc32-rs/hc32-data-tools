@@ -50,18 +50,25 @@ series,name,irq,description
 
 ## dma.csv — DMA 请求映射（一行 = 一个 外设信号→通道 触发源）
 
-来源：驱动头（LL `hc32_ll_dma.h` 的 `DMA_SRC_*`；DDL 各系列 `dma.h`/AOS 触发映射）
-+ RM 的 DMA 触发源表核对。**必须先从 RM 弄清编码语义**（常见：高 4 位=通道号、
-低 4 位=触发索引，或反之），再批量解码。
+来源：驱动头（LL 设备头 `EVT_SRC_*` + `hc32_ll_aos.h`；DDL 各系列 `dmac.h`
+触发枚举）+ RM 的 DMA 触发源表核对。两代驱动语义不同，**必须先从 RM 弄清编码
+语义**再批量解码（见各仓库 `data/csv/EXTRACTION_NOTES.md` 的"DMA 编码语义结论"）。
 
 ```
-series,dma,channel,request
+series,dma,channel,request[,trigger_id][,channels]
 ```
 
-- `dma`：DMA 实例名（如 `DMA1`；只有一个 DMA 的系列也统一填 `DMA1`）。
-- `channel`：通道号，从 0 或 1 计，遵循 RM 原始定义。
+- `dma`：DMA 实例名（LL 多控制器系列 `DMA1`/`DMA2`；单控制器系列 `DMA`；
+  DDL 统一 `DMA1`）。
+- `channel`：LL = RM 原始通道范围（`0-5` 等，来自 `AOS_DMA<x>_<n>` 宏，
+  任意请求可路由到任意通道）；DDL = `DMAC_CONFAx.TRI_SEL` 全局触发源索引
+  （非物理通道号）。
 - `request`：外设信号名，规范成 `外设_方向`（如 `USART1_RX`、`ADC1`、
-  `TIMA0_CMPA`），与驱动枚举名对应但去掉 `DMA_SRC_` 前缀。
+  `TIMA0_CMPA`），与驱动枚举名对应。
+- `trigger_id`（LL）：`EVT_SRC_*` 枚举数值（十进制），写 `AOS->DMAx_TRGSELy`。
+- `channels`（DDL）：该系列 DMAC 物理通道数，取 dmac.h `DmaCh*`/`DMA_CHANNEL*`
+  枚举（A052/F052=5、F420=6、其余=2，RM 第 12 章佐证），供
+  `core.dma_channels` 控制器通道清单使用。
 
 ## peripherals.csv — 外设实例（一行 = 一个外设实例，喂 family/peripherals YAML）
 
@@ -77,22 +84,40 @@ series,instance,kind,base_address,bus,fcg_reg,fcg_field,interrupts,notes
 - `bus`：`AHB`/`APB1`/…（RM/SVD 可查则填，否则空）。
 - `fcg_reg`/`fcg_field`：时钟门控寄存器与位域（如 `FCG1`/`FCG1_USART1_CLKEN`；
   DDL M0 系列形如 `PWC_FCG1`/`PWC_FCG1_USART1EN`）。GPIO 等无门控留空。
-- `interrupts`：该实例的中断名，`;` 分隔（如 `USART1_GLOBAL`），与 interrupts.csv
-  的 `name` 对齐；未知留空。
-- `notes`：自由文本。
+- `interrupts`：该实例的中断**信号名**，`;` 分隔，按 SVD `<interrupt>` 节点顺序
+  提取（LL 侧剥 `_IRQn` 后缀）。信号名与 interrupts.csv 的 `name` 不一定同形
+  （SVD 与设备头拼写可能异名，如 F472 信号 `ADC_1` vs 头枚举 `ADC1`）；
+  `csv_to_yaml.py` 核对该实例的信号序列与 SVD 一致后，才按位置读取
+  SVD `<value>` 的 IRQ 号归一 `interrupt` 引用（规则见 README
+  “data/family/<series>.yaml” 一节）。未知留空。
+- `notes`：自由文本。MODE 拆分定时器（SVD 同基址视图 `TIM0_MODE0/1/23`、
+  `ATIM0MODE0/1/23` 合并为物理实例 `TIM0`/`ATIM0`）行带
+  `SVD register views <首个视图> collapsed (same base)` 标记；
+  `csv_to_yaml.py` 据此与 `register_versions.csv` 的视图行双向互证，
+  family YAML 以 `views:` 挂接（instance 列保留物理名）。
 
 ## memory.csv — 内存区域基址（一行 = 一个系列）
 
-来源：设备头 `#define FLASH_BASE ...`、`SRAM_BASE` 或 SVD `<memory>`。
+来源：SDK GCC/IAR 链接脚本 MEMORY 区，与各系列 RM 内存映射表核对
+（设备头 `SRAM_BASE` 是系列级别名基址，不作主区起点，如 M441 头写
+`0x1FFF8000` 而实际 32K 主区从 `0x1FFFC000` 起）。
 
 ```
-series,flash_base,sram_base,sram_hi_base,notes
+series,flash_base,sram_base,sram_kb,extra_regions,notes
 ```
 
 - `flash_base`：代码 Flash 起始（M4 一般 `0x00000000`，M0 系列看头文件）。
-- `sram_base`：SRAM 起始（如 `0x1FFF8000`）。
-- `sram_hi_base`：可选的高速 SRAM 区起始（如 F460 的 0x20000000 32K 区）。
+- `sram_base`：主 SRAM 起始（如 `0x1FFF8000`；M4 系列主区常跨 0x20000000，
+  那是 SRAMH/SRAM0 两个物理 bank 的边界，不是地址别名）。
+- `sram_kb`：主 SRAM 大小（链接脚本实测；DS 标称可能并入保留区，
+  如 A448 标称 68K = 主区 64K + RAMB 4K）。
+- `extra_regions`：独立保留区（RAMB/RET_RAM 掉电保持 SRAM），格式
+  `名称@地址/大小K`，分号分隔（如 `RAMB@0x200f0000/4K`）。
 - `notes`：自由文本。
+
+DDL 侧 memory.csv 由 `parse_memory_icf()` 生成（IAR 模板 .icf），
+仅填 `series,flash_base,sram_base,sram_kb="",extra_regions="",notes`；
+旧列 `sram_hi_base` 已废弃（系误把 bank 边界当地址别名）。
 
 ## 校验要求
 

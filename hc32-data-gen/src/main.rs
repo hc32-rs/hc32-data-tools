@@ -99,7 +99,9 @@ fn main() -> anyhow::Result<()> {
 
     stopwatch.section("Parsing chips");
     let mut chip_count = 0usize;
-    let mut unmatched_dma = Vec::new();
+    let mut dma_unknown = Vec::new();
+    let mut dma_skipped = 0;
+    let mut aliased_dma = 0usize;
     let mut no_version = Vec::new();
 
     std::fs::create_dir_all("build/data/chips")?;
@@ -169,7 +171,12 @@ fn main() -> anyhow::Result<()> {
                 }
 
                 // Names are assigned upstream; unresolved instances retain the existing address-only fallback.
+                // MODE 拆分定时器走 views 列表（物理项 registers=None），
+                // 每视图自带 kind/version，不是降级对象。
                 for p in &mut core.peripherals {
+                    if !p.views.is_empty() {
+                        continue;
+                    }
                     let Some(regs) = &mut p.registers else {
                         continue;
                     };
@@ -182,9 +189,14 @@ fn main() -> anyhow::Result<()> {
             }
 
             // DMA includes（信号 → request 号挂到外设）
-            let unmatched = dma::handle_chip_dma_include(&meta_yaml_path, &mut chip)?;
-            for u in unmatched {
-                unmatched_dma.push(format!("{} {}", name, u));
+            let (unmatched, aliased) = dma::handle_chip_dma_include(&meta_yaml_path, &mut chip)?;
+            aliased_dma += aliased;
+            for (dma, signal) in unmatched {
+                if dma::is_known_unmatched(&chip.family, &signal) {
+                    dma_skipped += 1;
+                } else {
+                    dma_unknown.push(format!("{name} {dma}:{signal}"));
+                }
             }
 
             println!(
@@ -204,18 +216,34 @@ fn main() -> anyhow::Result<()> {
         let chip: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&f)?)?;
         for core in chip["cores"].as_array().unwrap() {
             for p in core["peripherals"].as_array().unwrap() {
+                let mut refs: Vec<(String, String, String)> = Vec::new();
                 if let Some(r) = p["registers"].as_object() {
-                    let key = format!(
-                        "{}_{}.json",
-                        r["kind"].as_str().unwrap(),
-                        r["version"].as_str().unwrap()
-                    );
+                    refs.push((
+                        r["kind"].as_str().unwrap().to_string(),
+                        r["version"].as_str().unwrap().to_string(),
+                        p["name"].as_str().unwrap_or("?").to_string(),
+                    ));
+                }
+                // MODE 视图：每视图一个 (kind, version) 引用，逐条校验
+                for v in p["views"].as_array().into_iter().flatten() {
+                    refs.push((
+                        v["kind"].as_str().unwrap().to_string(),
+                        v["version"].as_str().unwrap().to_string(),
+                        format!(
+                            "{}::{}",
+                            p["name"].as_str().unwrap_or("?"),
+                            v["name"].as_str().unwrap_or("?")
+                        ),
+                    ));
+                }
+                for (kind, version, inst) in refs {
+                    let key = format!("{}_{}.json", kind, version);
                     if !Path::new("build/data/registers").join(&key).exists() {
                         missing.push(format!(
                             "{}: {} ({})",
                             f.file_name().unwrap().to_string_lossy(),
                             key,
-                            p["name"].as_str().unwrap_or("?")
+                            inst
                         ));
                     }
                 }
@@ -229,11 +257,27 @@ fn main() -> anyhow::Result<()> {
         ));
     }
 
-    if !unmatched_dma.is_empty() {
+    // DMA 未匹配汇总：系统事件 + dmac.h 共享模板幽灵项静默计数，其余逐条列出
+    if dma_skipped > 0 {
         eprintln!(
-            "WARNING: {} dma signals matched no peripheral:\n  {}",
-            unmatched_dma.len(),
-            unmatched_dma.join("\n  ")
+            "INFO: {} dma signals are system events or shared-template phantom entries \
+             (PORT_EIRQ/EVENT_PORT/LVD/LCDTX/HAL*/HRPWM_EEDET, TIM4-6/LPUART on chips \
+             without that hardware) - not attached, expected",
+            dma_skipped
+        );
+    }
+    if aliased_dma > 0 {
+        eprintln!(
+            "INFO: {} dma requests attached via confirmed series alias \
+             (HC32A052/F052 UART0/UART1 -> USART0/USART1, dmac.h+RM TRI_SEL evidence)",
+            aliased_dma
+        );
+    }
+    if !dma_unknown.is_empty() {
+        eprintln!(
+            "WARNING: {} dma signals matched no peripheral (unknown source, review):\n  {}",
+            dma_unknown.len(),
+            dma_unknown.join("\n  ")
         );
     }
     if !no_version.is_empty() {

@@ -153,6 +153,22 @@ python3 hc32-data-tools/scripts/export_peripheral_versions.py --check
 - **工具**：`extract_ddl_csv.py` / `extract_ll_csv.py` 产出 `peripherals.csv`
   （`series,instance,kind,base_address,bus,fcg_reg,fcg_field,interrupts`），
   `csv_to_yaml.py` 生成 YAML 并从 `register_versions.csv` 挂上 `registers` 引用。
+- **MODE 拆分定时器**：物理实例（`TIM0`/`ATIM0`，承载地址/门控/中断）以
+  `views:` 列表挂 SVD 视图（`TIM0_MODE0/1/23` 等原样保留 + kind/version/block，
+  共 17 系列 × 60 实例）；单视图外设仍用 `registers:`，两者互斥。
+- **中断引用归一**：外设 `interrupts:` 段的 `signal` 保留 SVD 信号名（如
+  `ADC_1`、`EFM_SWINT17`），`interrupt` 归一到向量表（`data/interrupts/`）中的
+  规范名，规则与 `hc32-data-gen` 的同号去重一致——同号组取设备头枚举首个名：
+  1. 信号名即头枚举名（或其同号别名）→ 该号首名（如 F002 `GTIM`→`BTIM3_4_5`，
+     M458 `EFM_SWINT17`→`EFM`）；
+  2. 名字不在枚举 → 按 SVD `<interrupt><value>` 的 IRQ 号查同号组取首名
+     （如 F472 `ADC_1`=174→`ADC1`、`CAN_1`=132→`CAN1_INT`；值与设备头
+     全量核对无冲突）；共享 INTxxx 槽系列借此保留运行时路由语义
+     （F472 `GLOBAL0_SWINT0`→`INT000`，K116 `EXTINT0_1`→`EXTINT00_EXTINT01`）；
+  3. 名/号都查不到 → 在审计 CSV 保留信号，省略静态引用，并在 `csv_to_yaml.py` 的
+     `UNRESOLVED_INTERRUPTS` 登记后单独报告（头枚举跳号等证据不足项，
+     当前 6 条：F472/A472 PLA、F334/F336 PLAINT、K116/K118 LVD）；
+     登记之外的新未解析项使脚本非零退出，防止悄悄带进生成链。
 - **注意**：引脚复用（pins）暂缺，待从 DS GPIO 章节补齐（文件头有 TODO 注释）。
 
 ### `data/interrupts/<series>.yaml`（中断向量）
@@ -172,9 +188,14 @@ python3 hc32-data-tools/scripts/export_peripheral_versions.py --check
 
 ### `data/memory/<series>_F<n>S<n>.yaml`（内存布局）
 
-- **来源**：设备头 `FLASH_BASE`/`SRAM_BASE` `#define` 或 SDK 链接脚本
-  （`memory.csv` 的 notes 列记录出处）；Flash/SRAM 大小按 chips.csv 的
-  型号组合去重成 `<系列>_F<大小>S<大小>.yaml`。
+- **来源**：SDK 链接脚本 MEMORY 区 + 各系列 RM 内存映射表
+  （`memory.csv` 的 `sram_kb`/`extra_regions`/notes 列记录出处与实测值）。
+  主 SRAM 大小取链接脚本实测：DS 标称 SRAM 可能并入独立保留区
+  （如 A448 标称 68K = 主区 64K + RAMB 4K），照抄标称会合成不存在的连续大区。
+  独立保留区（RAMB/RET_RAM，掉电保持 SRAM，如 0x200F0000 4K）逐区输出，
+  与主区物理 bank 区分（M4 主区跨 0x20000000 是 SRAMH/SRAM0 两个 bank 的
+  边界，非地址别名）。
+- 型号组合去重成 `<系列>_F<大小>S<大小>.yaml`，文件名中的 S 值保留 DS 标称。
 
 ## Rust 生成链：四个 crate
 
@@ -182,7 +203,8 @@ python3 hc32-data-tools/scripts/export_peripheral_versions.py --check
 
 - **`hc32-data-serde`**：`data/chips/*.yaml` 顶层结构的 serde 类型。与 ch32 版差异：
   无 subfamily/NV（非易失描述符）/ram-code 内存选项；`rcc` 只有 `enable`
-  （PWC/FCG 时钟门控位）；内存区命名 FLASH/SRAM；request 号为 `u16`。
+  （PWC/FCG 时钟门控位）；内存区命名 FLASH/SRAM（独立保留区沿用 SDK 链接脚本
+  命名 RAMB/RET_RAM，MemoryRole 归入 Ram）；request 号为 `u16`。
   含双仓库全部 chips YAML 的解析往返测试（`cargo test -p hc32-data-serde`）。
 - **`hc32-data-gen`**：读**两个**数据仓库根（默认
   `ddl=../hc32-ddl-data/data:ll=../hc32-ll-data/data`，环境变量
@@ -191,7 +213,11 @@ python3 hc32-data-tools/scripts/export_peripheral_versions.py --check
     名称解析按 `_ddl_` / `_ll_` 分隔，支持外设名下划线及数字变体后缀；排除项兼容旧名称。
   - DMA 触发按 HC32 语义挂 `request` 号到外设（DDL=TRI_SEL 全局索引 /
     LL=EVT_SRC 事件号），不推断物理通道；信号名按“忽略下划线的最长前缀”
-    匹配外设实例（`LP_UART0_RX`→`LPUART0`、`ADCJQR`→`ADC`）；
+    匹配外设实例（`LP_UART0_RX`→`LPUART0`、`ADCJQR`→`ADC`）；前缀失配时
+    走**已确认的系列别名表**（仅 HC32A052/F052：`UART0/1`→`USART0/1`，
+    `dmac.h` 触发注释与 RM TRI_SEL 表证实，信号名保留 SDK 原拼）；
+    未匹配信号分类为系统事件/共享模板幽灵项（计数 INFO）与来源不明（逐条
+    WARNING）；`core.dma_channels` 由 chips YAML 透传控制器通道清单；
   - IRQn 同号别名/共享重定向向量按枚举顺序保留首个主名；
   - 无内存布局的芯片跳过并告警。
 - **`hc32-data-macros`**：`EnumDebug` derive（元数据 IR 的 Debug 输出用）。
@@ -219,14 +245,26 @@ M4F（`hc32f460jcta@thumbv7em`）构建/doc + host 元数据测试。全量 214 
 提取侧缺口（补齐后生成侧自动恢复）：
 
 1. **pins 引脚复用**未提取（DS GPIO 章节表格解析），family YAML 留 TODO；
-2. **SVD MODE 拆分实例**（`TIM0_MODE0/1/23` vs 设备头 `TIM0`）映射待在
-  csv_to_yaml.py 里建立——建立前这些实例在生成侧按缺版本降级；
+2. ~~**SVD MODE 拆分实例**映射待建立~~ **已解决**：`csv_to_yaml.py` 现按
+   `_?MODE(0|1|23)$` 后缀把 `register_versions.csv` 的 SVD 视图名
+   （`TIM0_MODE0/1/23`、`ATIM0MODE0/1/23`）反向关联到 `peripherals.csv` 的
+   物理实例（`TIM0`/`ATIM0`），family YAML 以 `views:` 列表挂接
+   （17 系列 × 60 实例，视图 SVD 原名 + kind/version/block 逐项保留）。
+   生成链贯通：物理实例承载地址/FCG 门控/中断（chips JSON 与 metadata 的
+   `views` 字段），PAC 保留物理实例地址常量，并为每个视图新增同基址的类型化常量
+   （常量名沿用 SVD 视图名，
+   附模式切换 doc：工作模式由控制寄存器 MD 位运行时选择，地址/时钟/中断
+   共用，勿并发访问两个视图）。关联完整性校验（视图 kind/block 一致性、
+   与提取侧合并 note 双向互证）失败即中止，逐实例关联报告打印到 stdout；
 3. **F120/M120** 无 DS，官网行为主源；**F155** DS 版式特殊；**A472** 同缺内存
-  布局——生成侧跳过；
+   布局——生成侧跳过；
 4. 寄存器描述为 SVD 原文（自动生成的占位文本，质量有限）；
 5. HC32 SVD 无 enumeratedValues，`enum/` 段暂为空；后续可用
-  `chiptool transform`（`MakeRegisterArray`/`MergeEnums`）收敛寄存器版本号；
-6. `core.dma_channels`（DMA 控制器通道清单）未生成，待补每系列通道数表；
+   `chiptool transform`（`MakeRegisterArray`/`MergeEnums`）收敛寄存器版本号；
+6. ~~`core.dma_channels`（DMA 控制器通道清单）未生成~~：已接入——通道数来自
+   dma.csv（LL：设备头 `AOS_DMA<x>_<n>` 宏范围；DDL：`dmac.h` `DmaCh*` 枚举
+   即 channels 列，A052/F052=5、F420=6、其余=2，RM 第 12 章佐证），
+   `csv_to_yaml.py` 写入 chips YAML 的 `cores[].dma_channels`；
 7. 各系列提取细节见各数据仓库 `data/csv/EXTRACTION_NOTES.md`；
 8. **HC32F175（LL）暂停支持**：IP 多代缝合（旧式布局、固定 DMAC 请求编号），
    由 `scripts/support_scope.py` 声明、提取与生成链跳过；SVD 归档保留，其专属
@@ -236,10 +274,12 @@ M4F（`hc32f460jcta@thumbv7em`）构建/doc + host 元数据测试。全量 214 
 
 | 现象 | 数量 | 处理 |
 |---|---|---|
-| 外设挂不上寄存器版本（SVD/设备头实例名不一致，见缺口 2） | 367 | 降级为纯地址外设 |
+| ~~外设挂不上寄存器版本（SVD/设备头实例名不一致，见缺口 2）~~ | ~~367~~ → 0 | MODE 视图关联已建立，TIM/ATIM 经 `views` 挂接（见缺口 2），无降级 |
 | 芯片无内存布局（见缺口 3） | 16 | 跳过不生成 |
 | IRQn 同号别名/共享向量（如 `INT000`/`SWINT0`、`BTIM3_4_5`/`GTIM`） | 1192 | 保留枚举首个主名 |
-| DMA 触发源无外设实例（`PORT_EIRQ`/`LVD`/`EVENT_PORT` 等端口系统事件） | 4156 | 跳过挂载 |
+| DMA 系统事件 + dmac.h 共享模板幽灵项（`PORT_EIRQ`/`LVD`/`EVENT_PORT`；无对应硬件的 `TIM4-6`/`LP_UART`/`LCDTX` 等） | 4116 | 归类计数（INFO），不挂载——前者不属于任何外设实例，后者是跨系列模板中本系列没有的触发 |
+| DMA 触发名 ≠ 实例名（HC32A052/F052 `UART0/1`→`USART0/1`） | 40 | 系列别名表挂载（`dmac.h` 注释 + RM TRI_SEL 表证实），信号名保留 SDK 原拼 |
+| DMA 触发来源不明 | 0 | 逐条告警待人工核对 |
 
 ## CSV 列定义
 

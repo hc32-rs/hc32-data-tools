@@ -82,6 +82,51 @@ mod tests {
         check_file(path);
     }
 
+    /// MODE 拆分定时器外设（views 列表）serde 往返：
+    /// family YAML → Peripheral → YAML，views 键序与字段保持稳定。
+    #[test]
+    fn test_peripheral_views_roundtrip() {
+        let src = r"- name: TIM0
+  address: 0x40000C00
+  views:
+  - name: TIM0_MODE0
+    mode: MODE0
+    kind: tim
+    version: ddl_v2
+    block: TIM
+  - name: TIM0_MODE1
+    mode: MODE1
+    kind: tim
+    version: ddl_v3_1
+    block: TIM
+  - name: TIM0_MODE23
+    mode: MODE23
+    kind: tim
+    version: ddl_v4_3
+    block: TIM
+  rcc:
+    enable:
+      register: PERI_CLKEN
+      field: SysctrlPeripheralBaseTim
+  interrupts:
+  - signal: TIM0
+    interrupt: TIM0
+";
+        let list: Vec<chip::core::Peripheral> = serde_yaml::from_str(src).unwrap();
+        let p = list.into_iter().next().unwrap();
+        assert_eq!("TIM0", p.name);
+        assert!(p.registers.is_none());
+        assert_eq!(3, p.views.len());
+        assert_eq!("TIM0_MODE1", p.views[1].name);
+        assert_eq!("MODE1", p.views[1].mode);
+        assert_eq!("ddl_v3_1", p.views[1].version);
+        let out = serde_yaml::to_string(&p).unwrap();
+        let p2: chip::core::Peripheral = serde_yaml::from_str(&out).unwrap();
+        assert_eq!(p, p2);
+        // 多视图项不再输出无 version 的 registers 块
+        assert!(!out.contains("registers:"));
+    }
+
     #[test]
     fn test_all() {
         use rayon::prelude::*;

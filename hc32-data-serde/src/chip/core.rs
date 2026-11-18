@@ -8,6 +8,9 @@ pub struct Peripheral {
     pub address: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub registers: Option<peripheral::Registers>,
+    /// MODE 拆分定时器的 SVD 视图列表（与 `registers` 互斥；见 peripheral::RegisterView）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub views: Vec<peripheral::RegisterView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rcc: Option<peripheral::Rcc>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

@@ -93,6 +93,11 @@ impl Gen {
                     if let Some(registers) = &mut p.registers {
                         registers.ir = format!(":ir_for:{}_{}:", registers.kind, registers.version);
                     }
+                    // MODE 视图各挂自己的寄存器表引用
+                    for v in &mut p.views {
+                        v.registers.ir =
+                            format!(":ir_for:{}_{}:", v.registers.kind, v.registers.version);
+                    }
                 }
             }
 

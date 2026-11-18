@@ -39,10 +39,16 @@ CHIPS_HEADER = ["part_no", "series", "freq_mhz", "flash_kb", "sram_kb", "package
                 "i2s", "can", "usb", "adc", "dac", "timer", "rtc", "wdt", "touchkey",
                 "lcd", "opa", "cmp", "other", "url", "source"]
 INT_HEADER = ["series", "name", "irq", "description"]
-DMA_HEADER = ["series", "dma", "channel", "request"]
+# channels 列 = 该系列 DMAC 物理通道数（dmac.h DmaCh/DMA_CHANNEL 枚举 + RM 佐证，
+# 如 A052 RM 第 12 章"DMAC 具有 5 条独立的 DMA 通道"、A136 RM"2 条"）。
+# 老的 channel 列仍是 TRI_SEL 全局触发源索引，与物理通道无关。
+DMA_HEADER = ["series", "dma", "channel", "request", "channels"]
 PERI_HEADER = ["series", "instance", "kind", "base_address", "bus", "fcg_reg",
                "fcg_field", "interrupts", "notes"]
-MEM_HEADER = ["series", "flash_base", "sram_base", "sram_hi_base", "notes"]
+# 与 LL 侧同构（见 CSV_SCHEMA.md）：DDL 老系列的 IAR 模板 .icf 只有单一
+# ROM/RAM 区，sram_kb/extra_regions 由 csv_to_yaml 回退 chips.csv 标称填充
+MEM_HEADER = ["series", "flash_base", "sram_base", "sram_kb", "extra_regions",
+              "notes"]
 
 # ----------------------------------------------------------------------------
 # SDK -> series registry
@@ -337,6 +343,23 @@ def _norm_dma_req(raw):
     s = re.sub(r"_{2,}", "_", s).strip("_")
     s = s.upper()
     return s
+
+
+def parse_dma_channels(sdk_dir):
+    """Parse dmac.h channel enum -> physical channel count.
+
+    两种枚举风格：DmaCh0/1/4（M0 系列老驱动）与 DMA_CHANNEL0..5（F420）。
+    取最大编号 +1；枚举缺失时返回 0（调用方按 2 通道老布局回退并告警）。
+    """
+    path = os.path.join(sdk_dir, "driver", "inc", "dmac.h")
+    text = read_text(path)
+    if not text:
+        return 0
+    best = -1
+    for m in re.finditer(r"^\s+(?:DmaCh(\d+)|DMA_CHANNEL(\d+))\s*=", text, re.M):
+        n = int(m.group(1) or m.group(2))
+        best = max(best, n)
+    return best + 1
 
 
 def parse_dma_triggers(sdk_dir):
@@ -1463,16 +1486,21 @@ def extract_sdk(cfg, sdk_root, svd_dir):
     except Exception as e:
         trigs = []
         result["issues"].append("dma parse failed: %s" % e)
+    dma_chs = parse_dma_channels(sdk_dir)
+    if trigs and not dma_chs:
+        # 枚举缺失的 SDK 按老 DDL 双通道布局回退（全部受影响 RM 均为 2 条通道）
+        dma_chs = 2
+        result["issues"].append("dmac.h channel enum not found, fallback 2ch")
     for s in cfg["series"]:
         result["dma"][s] = [dict(dma="DMA1", channel=str(idx), request=req,
-                                 description=desc)
+                                 description=desc, channels=str(dma_chs))
                             for idx, req, desc in trigs]
 
     # memory
     for s in cfg["series"]:
         fb, sb, notes = parse_memory_icf(sdk_dir)
         result["memory"][s] = dict(flash_base=fb, sram_base=sb,
-                                   sram_hi_base="", notes=notes)
+                                   sram_kb="", extra_regions="", notes=notes)
 
     # chips
     try:
@@ -1497,8 +1525,10 @@ def extract_sdk(cfg, sdk_root, svd_dir):
 # ----------------------------------------------------------------------------
 
 def write_csv(path, header, rows):
+    # lineterminator="\n"：仓库行尾策略为全 LF（.gitattributes），
+    # csv 模块默认 CRLF 会污染工作区 diff。
     with open(path, "w", encoding="utf-8", newline="") as f:
-        w = csv.writer(f)
+        w = csv.writer(f, lineterminator="\n")
         w.writerow(header)
         for r in rows:
             w.writerow([r.get(h, "") for h in header])
@@ -1539,7 +1569,8 @@ def main():
                 int_rows.append(dict(series=s, **r))
             for r in d:
                 dma_rows.append(dict(series=s, dma=r["dma"], channel=r["channel"],
-                                     request=r["request"]))
+                                     request=r["request"],
+                                     channels=r.get("channels", "")))
             peri_rows.extend(dict(series=s, **r) for r in p)
             if m:
                 mem_rows.append(dict(series=s, **m))

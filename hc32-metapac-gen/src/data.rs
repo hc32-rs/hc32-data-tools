@@ -337,6 +337,10 @@ impl MemoryRole {
             MemoryRole::OptionBytes
         } else if name == "SRAM" || name == "RAM" {
             MemoryRole::Ram
+        } else if name == "RAMB" || name == "RET_RAM" {
+            // 独立掉电保持 RAM 区（SDK 链接脚本命名，如 0x200F0000 4K），
+            // 语义上仍是通用 RAM，一并归入 Ram 角色
+            MemoryRole::Ram
         } else {
             panic!(
                 "memory region {name:?} has no known role mapping — extend MemoryRole::from_name"
@@ -406,6 +410,8 @@ pub struct Peripheral {
     #[serde(default)]
     pub registers: Option<PeripheralRegisters>,
     #[serde(default)]
+    pub views: Vec<PeripheralView>,
+    #[serde(default)]
     pub rcc: Option<PeripheralRcc>,
     #[serde(default)]
     pub pins: Vec<PeripheralPin>,
@@ -423,6 +429,7 @@ impl std::fmt::Debug for Peripheral {
             .field("name", &self.name)
             .field("address", &format_args!("{:#x}", self.address))
             .field("registers", &self.registers)
+            .field("views", &self.views)
             .field("rcc", &self.rcc)
             .field("pins", &self.pins)
             .field("dma_channels", &self.dma_channels)
@@ -480,4 +487,44 @@ pub struct PeripheralRegisters {
     pub block: String,
     #[serde(default)]
     pub ir: String,
+}
+
+/// MODE 拆分定时器的一个 SVD 视图（TIM0_MODE0/1/23、ATIM0MODE0/1/23）。
+/// 物理身份（地址/门控/中断）在外设项上；视图只挂寄存器版本。
+/// JSON 里视图的寄存器字段平铺为 kind/version/block（与 chips JSON 同构），
+/// 读入时包成 PeripheralRegisters。
+#[derive(Debug, Eq, PartialEq, Clone, Hash)]
+pub struct PeripheralView {
+    /// SVD 视图原名（= register_versions.csv 实例键，PAC const 名）。
+    pub name: String,
+    /// 工作模式档位：MODE0 / MODE1 / MODE23。
+    pub mode: String,
+    pub registers: PeripheralRegisters,
+}
+
+impl<'de> Deserialize<'de> for PeripheralView {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct Raw {
+            name: String,
+            mode: String,
+            kind: String,
+            version: String,
+            block: String,
+        }
+        let raw = Raw::deserialize(deserializer)?;
+        Ok(PeripheralView {
+            name: raw.name,
+            mode: raw.mode,
+            registers: PeripheralRegisters {
+                kind: raw.kind,
+                version: raw.version,
+                block: raw.block,
+                ir: String::new(),
+            },
+        })
+    }
 }
