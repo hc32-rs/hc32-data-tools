@@ -25,8 +25,6 @@ FIELDS = ('series', 'instance', 'kind', 'current_version', 'proposed_version',
           'target_file', 'status', 'notes')
 BEGIN = '<!-- peripheral-versions:begin -->'
 END = '<!-- peripheral-versions:end -->'
-EXCLUDED = frozenset('DCU MAU FMAC HASH SKE USBFS USBHS ETH MDIO NFC SDIOC DVP QSPI '
-                     'SMC DMC MPU KEYSCAN OTS VREF HRPWM HALL PLA TMR6 ERMU'.split())
 VERSION = re.compile(r'v([1-9]\d*)(?:_([1-9]\d*))?\Z')
 TOPICS = {
     'analog': '模拟', 'clock-reset': '时钟、复位与校准',
@@ -45,15 +43,6 @@ def require(condition: bool, message: str) -> None:
 
 def version_key(version: str) -> tuple[int, ...]:
     return tuple(map(int, re.findall(r'\d+', version)))
-
-
-def is_excluded(side: str, series: str, instance: str) -> bool:
-    if side != 'll':
-        return False
-    if series == 'HC32M458' and instance == 'DFM':
-        return True
-    return any(re.fullmatch(prefix + r'(?:\d+|_COMMON)?', instance)
-               for prefix in EXCLUDED)
 
 
 def target_file(side: str, layout: dict) -> str:
@@ -122,8 +111,6 @@ def load_review(repo: Path, side: str) -> tuple[list[dict], list[dict]]:
     require(len(source_index) == len(source_rows), 'duplicate source instance')
     assigned = {}
     targets = set()
-    tiers = defaultdict(set)
-    versions = defaultdict(set)
     digest_cache = {}
     ir_cache = {}
     svd_cache = {}
@@ -154,8 +141,6 @@ def load_review(repo: Path, side: str) -> tuple[list[dict], list[dict]]:
             target = target_file(side, layout)
             require(target not in targets, f'duplicate target: {target}')
             targets.add(target)
-            tiers[layout['kind']].add(layout['tier'])
-            versions[(layout['kind'], layout['tier'])].add(int(match[2] or 0))
         path = repo / 'data/registers' / f'{source}.yaml'
         if source not in digest_cache:
             digest_cache[source] = hashlib.sha256(path.read_bytes()).hexdigest()
@@ -189,20 +174,26 @@ def load_review(repo: Path, side: str) -> tuple[list[dict], list[dict]]:
                 if 'block' in layout:
                     require(row['block'] == layout['block'], f'{key}: block reference changed')
                 require(instance in svd_cache[series], f'{key}: missing from SVD')
-                require(is_excluded(side, series, instance) == (status == 'excluded'),
-                        f'{key}: exclusion scope mismatch')
                 assigned[key] = layout
     require(set(assigned) == set(source_index),
             f'unassigned instances: {sorted(set(source_index) - set(assigned))}')
     actual_sources = {p.stem for p in (repo / 'data/registers').glob('*.yaml')}
     require(used_sources == actual_sources,
             f'unmapped/orphan register files: {sorted(actual_sources ^ used_sources)}')
-    for kind, numbers in tiers.items():
-        require(numbers == set(range(1, max(numbers) + 1)), f'{kind}: non-contiguous tiers')
-    for key, numbers in versions.items():
-        require(numbers == set(range(max(numbers) + 1)), f'{key}: non-contiguous variants')
-    base_layouts = {(e['kind'], e['tier']): e for e in layouts
-                    if e['status'] in ('proposed', 'active') and '_' not in e['version']}
+    # 档位/变体允许空洞：系列移除（如 HC32F175 暂停支持）后其专属档位随之删除；
+    # 保持既有编号稳定，不做重编号（重命名会连锁破坏 PAC 模块名与 legacy 追溯）。
+    # 重复编号由 duplicate target 检查兜底。
+    by_tier = defaultdict(list)
+    for e in layouts:
+        if e['status'] in ('proposed', 'active'):
+            by_tier[(e['kind'], e['tier'])].append(e)
+    # 档位基准：优先 plain 版本（vN）；该档位的 plain 已随系列移除删除时，
+    # 回退到档位内版本号最小的变体。
+    base_layouts = {}
+    for key, es in by_tier.items():
+        plains = [e for e in es if '_' not in e['version']]
+        base_layouts[key] = plains[0] if plains else min(
+            es, key=lambda e: version_key(e['version']))
     for layout in layouts:
         if layout['status'] == 'excluded':
             layout['detail'] = ''
@@ -294,11 +285,14 @@ def replace_block(text: str, generated: str) -> str:
 
 def validate_docs(repo: Path, side: str, layouts: list[dict], outputs: dict[Path, str]) -> None:
     targets = {target_file(side, e).removesuffix('.rs') for e in layouts if e['status'] in ('proposed', 'active')}
+    # 排除项对照表会引用被排除布局的现有文件名（可能是已激活的规范名），
+    # 全文本扫描放行；正文（生成块之外）仍只允许 active/proposed 目标名。
+    allowed = targets | {e['source'] for e in layouts if e['status'] == 'excluded'}
     docs = [repo / 'README.md', *sorted((repo / 'docs').rglob('*.md'))]
     for path in docs:
         text = outputs.get(path, path.read_text())
         for match in re.finditer(r'\b([a-z][a-z0-9_]*_(?:ddl|ll)_v\d+(?:_\d+)?)\b', text):
-            require(match[1] in targets, f'{path}: unknown proposed name {match[1]}')
+            require(match[1] in allowed, f'{path}: unknown proposed name {match[1]}')
         prose = re.sub(re.escape(BEGIN) + r'.*?' + re.escape(END), '', text, flags=re.S)
         for name in re.findall(r'\b[a-z][a-z0-9_]*_v[0-9][a-z0-9_]*\b', prose):
             require(name in targets, f'{path}: obsolete or unknown version in prose: {name}')

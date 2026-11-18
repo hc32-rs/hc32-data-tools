@@ -26,6 +26,8 @@ from pathlib import Path
 
 import yaml
 
+import support_scope
+
 WS = Path(__file__).resolve().parents[2]
 BUILD = WS / "build"
 
@@ -186,16 +188,29 @@ def rename_block(ir: dict, kind: str) -> dict:
     return out
 
 
+def render_layout(ir: dict, rep: tuple[str, str], cover: str) -> str:
+    """布局 YAML 的最终文本：文件头 + 排版后的 IR（digest 校验与写出共用）。"""
+    header = (f"# 由 chiptool extract-all 生成（hc32-data-tools/chiptool_registers.py）。\n"
+              f"# 布局代表：{rep[0]}/{rep[1]}；覆盖系列：{cover}。\n")
+    return header + yaml.dump(ir, allow_unicode=True, sort_keys=False,
+                              default_flow_style=False, width=100)
+
+
 def process_repo(repo: Path, work: Path, fixed: Path) -> dict:
     svd_dir = repo / "svd"
     out_reg = repo / "data" / "registers"
     out_reg.mkdir(parents=True, exist_ok=True)
     rows: list[dict] = []
 
+    side_of_repo = repo.name.removeprefix("hc32-").removesuffix("-data")
     series_ir: dict[str, dict[str, dict]] = {}
     series_derived: dict[str, dict[str, str]] = {}
     for svd in sorted(svd_dir.glob("*.svd")):
         s = svd.stem
+        skip = support_scope.unsupported(side_of_repo).get(s)
+        if skip:
+            print(f"SKIP {s}: {skip}")
+            continue
         raw = work / repo.name / s
         if not extract(svd, raw, fixed):
             continue
@@ -229,17 +244,22 @@ def process_repo(repo: Path, work: Path, fixed: Path) -> dict:
             if signature(rename_block(series_ir[ss][ii], block)) != sig:
                 raise ValueError(f"Layout drift: {layout['source']} / {ss}/{ii}; review mapping")
         cover = ", ".join(sorted({ss for ss, _ in members}))
-        header = (f"# 由 chiptool extract-all 生成（hc32-data-tools/chiptool_registers.py）。\n"
-                  f"# 布局代表：{s}/{inst}；覆盖系列：{cover}。\n")
-        content = header + yaml.dump(ir, allow_unicode=True, sort_keys=False,
-                                    default_flow_style=False, width=100)
+        content = render_layout(ir, (s, inst), cover)
         if hashlib.sha256(content.encode()).hexdigest() != layout["source_sha256"]:
             raise ValueError(f"Source changed for {layout['source']}; review manifest digest")
         if layout["source"] in outputs:
             raise ValueError(f"Duplicate output: {layout['source']}")
         outputs[layout["source"]] = content
         if layout["status"] == "excluded":
-            kind, version = layout["source"].rsplit("_", 1)
+            # 已按规范名激活的布局保持原名（<kind>_<side>_vN → kind=<kind>,
+            # version=<side>_vN），避免排除时连带动文件与 PAC 模块改名；
+            # 原始名排除项（如 dcu_v1、dmc_common）仍按最后一个下划线拆分。
+            m = re.search(r"_(?:ddl|ll)_", layout["source"])
+            if m:
+                kind = layout["source"][:m.start()]
+                version = layout["source"][m.start() + 1:]
+            else:
+                kind, version = layout["source"].rsplit("_", 1)
         else:
             kind, version = layout["kind"], f"{side}_{layout['version']}"
         for ss, ii in members:

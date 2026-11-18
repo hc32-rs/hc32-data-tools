@@ -79,6 +79,17 @@ def read_csv(path: Path) -> list[dict]:
         return list(csv.DictReader(f))
 
 
+PRUNED: list[str] = []
+
+
+def prune(out_dir: Path, keep: set[str]) -> None:
+    """删除不再由当前 CSV 产出的陈旧 YAML（与 chiptool_registers.py 同规则）。"""
+    for old in sorted(out_dir.glob("*.yaml")):
+        if old.name not in keep:
+            old.unlink()
+            PRUNED.append(f"{out_dir.parent.name}/{old.name}")
+
+
 def read_ctx(repo: Path) -> dict:
     c = repo / "data" / "csv"
     ctx = {name: read_csv(c / f"{name}.csv")
@@ -125,6 +136,8 @@ def emit_interrupts(repo: Path, ctx: dict) -> int:
             lines.append(f"{name}: {irq}")
         (out_dir / f"{s}.yaml").write_text("\n".join(lines) + "\n", encoding="utf-8")
         n += 1
+    if by_series:
+        prune(out_dir, {f"{s}.yaml" for s in by_series})
     return n
 
 
@@ -155,6 +168,8 @@ def emit_dma(repo: Path, ctx: dict) -> int:
         lines = header.splitlines() + [f"{k}: {v}" for k, v in sorted(body.items())]
         (out_dir / f"{s}_{dma}.yaml").write_text("\n".join(lines) + "\n", encoding="utf-8")
         n += 1
+    if by_group:
+        prune(out_dir, {f"{s}_{dma}.yaml" for s, dma in by_group})
     return n
 
 
@@ -197,6 +212,8 @@ def emit_memory(repo: Path, ctx: dict) -> dict[tuple[str, str, str], str]:
                 f"# 基址来自设备头/链接脚本（见 data/csv/memory.csv notes）。\n")
         (out_dir / fname).write_text(body + dump_yaml(doc), encoding="utf-8")
         files[(s, f, sz)] = fname
+    if combos:
+        prune(out_dir, set(files.values()))
     return files
 
 
@@ -242,6 +259,8 @@ def emit_family(repo: Path, ctx: dict, inst_ver: dict) -> dict[str, int]:
                   f"# 引脚复用（pins）暂缺，待从数据手册 GPIO 章节补齐。\n")
         (out_dir / f"{s}.yaml").write_text(header + dump_yaml(items), encoding="utf-8")
         stats[s] = len(items)
+    if by_series:
+        prune(out_dir, {f"{s}.yaml" for s in by_series})
     return stats
 
 
@@ -324,12 +343,15 @@ def emit_chips(repo: Path, ctx: dict, mem_files: dict) -> list[Path]:
         fp = out_dir / f"{part}.yaml"
         fp.write_text(text, encoding="utf-8")
         written.append(fp)
+    if merged:
+        prune(out_dir, {p.name for p in written})
     return written
 
 
 # ---------- 主流程 ----------
 
 def convert_repo(repo: Path) -> dict:
+    PRUNED.clear()
     ctx = read_ctx(repo)
     if not ctx["chips"]:
         raise SystemExit(f"{repo}: 缺少 data/csv/chips.csv")
@@ -381,6 +403,9 @@ def main() -> None:
         fam = stats["family"]
         print(f"  family: {len(fam)} 个系列，外设实例合计 {sum(fam.values())}")
         print("  （registers/ 由 chiptool_registers.py 生成，此处不重写）")
+        if PRUNED:
+            print(f"  清理陈旧文件 {len(PRUNED)} 个：", ", ".join(PRUNED[:8]),
+                  "…" if len(PRUNED) > 8 else "")
         validate(repo)
 
 

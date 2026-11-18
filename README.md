@@ -7,7 +7,7 @@
 | 仓库 | 角色 |
 |---|---|
 | [hc32-ddl-data](https://github.com/hc32-rs/hc32-ddl-data) | DDL 系列数据仓库（20 个老驱动系列，含 `svd/` 归档） |
-| [hc32-ll-data](https://github.com/hc32-rs/hc32-ll-data) | LL 系列数据仓库（27 个系列，含 `svd/` 归档） |
+| [hc32-ll-data](https://github.com/hc32-rs/hc32-ll-data) | LL 系列数据仓库（26 个系列，含 `svd/` 归档；HC32F175 暂停支持） |
 | **hc32-data-tools**（本仓库） | 提取/转换脚本（Python，`scripts/`）+ 生成链（Rust，四个 crate） |
 | [hc32-metapac](https://github.com/hc32-rs/hc32-metapac) | 生成产物：全系列 PAC + 元数据 crate（自动生成，勿手工修改） |
 
@@ -206,12 +206,12 @@ python3 hc32-data-tools/scripts/export_peripheral_versions.py --check
   `build/hc32-metapac/src` 全量排版后产物才算定稿；本地与 nightly CI
   都走这一步，保证两边输出一致。
 
-生成的 `build/hc32-metapac` 即 `hc32-metapac` crate（当前 218 个芯片，feature 为
+生成的 `build/hc32-metapac` 即 `hc32-metapac` crate（当前 214 个芯片，feature 为
 完整型号小写，如 `hc32f003c4pa`）。可用 feature：`pac`（默认）、`metadata`、`rt`、
 `memory-x`。用法详见其 [README](https://github.com/hc32-rs/hc32-metapac)。
 
 生成验证：`./d ci` = `./d gen` + M0+（`hc32f003c4pa@thumbv6m`）与
-M4F（`hc32f460jcta@thumbv7em`）构建/doc + host 元数据测试。全量 218 芯片
+M4F（`hc32f460jcta@thumbv7em`）构建/doc + host 元数据测试。全量 214 芯片
 `cargo check` 100% 通过；重跑生成字节级一致。
 
 ## 数据缺口与降级规则
@@ -227,7 +227,10 @@ M4F（`hc32f460jcta@thumbv7em`）构建/doc + host 元数据测试。全量 218 
 5. HC32 SVD 无 enumeratedValues，`enum/` 段暂为空；后续可用
   `chiptool transform`（`MakeRegisterArray`/`MergeEnums`）收敛寄存器版本号；
 6. `core.dma_channels`（DMA 控制器通道清单）未生成，待补每系列通道数表；
-7. 各系列提取细节见各数据仓库 `data/csv/EXTRACTION_NOTES.md`。
+7. 各系列提取细节见各数据仓库 `data/csv/EXTRACTION_NOTES.md`；
+8. **HC32F175（LL）暂停支持**：IP 多代缝合（旧式布局、固定 DMAC 请求编号），
+   由 `scripts/support_scope.py` 声明、提取与生成链跳过；SVD 归档保留，其专属
+   布局已从显式映射删除（编号压实，旧名在映射的 `renamed_from` 留档）。
 
 生成侧降级（`./d gen` 日志逐条告警，当前数量）：
 
@@ -236,7 +239,7 @@ M4F（`hc32f460jcta@thumbv7em`）构建/doc + host 元数据测试。全量 218 
 | 外设挂不上寄存器版本（SVD/设备头实例名不一致，见缺口 2） | 367 | 降级为纯地址外设 |
 | 芯片无内存布局（见缺口 3） | 16 | 跳过不生成 |
 | IRQn 同号别名/共享向量（如 `INT000`/`SWINT0`、`BTIM3_4_5`/`GTIM`） | 1192 | 保留枚举首个主名 |
-| DMA 触发源无外设实例（`PORT_EIRQ`/`LVD`/`EVENT_PORT` 等端口系统事件） | 4362 | 跳过挂载 |
+| DMA 触发源无外设实例（`PORT_EIRQ`/`LVD`/`EVENT_PORT` 等端口系统事件） | 4156 | 跳过挂载 |
 
 ## CSV 列定义
 

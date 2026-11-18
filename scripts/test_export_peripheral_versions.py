@@ -107,13 +107,18 @@ class ReviewTests(unittest.TestCase):
             self.load()
 
     def test_non_numeric_or_skipped_variant_is_rejected(self):
-        for version, message in [('v1a', 'invalid version'), ('v1_0', 'invalid version'),
-                                 ('v1_2', 'non-contiguous variants')]:
+        for version, message in [('v1a', 'invalid version'), ('v1_0', 'invalid version')]:
             with self.subTest(version=version):
                 self.proposal['layouts'][0]['version'] = version
                 self.save()
                 with self.assertRaisesRegex(ValueError, message):
                     self.load()
+
+    def test_variant_holes_are_allowed(self):
+        # 档位/变体允许空洞：系列移除后其专属档位删除，既有编号保持稳定。
+        self.proposal['layouts'][0]['version'] = 'v1_2'
+        self.save()
+        self.load()
 
     def test_incorrect_review_counts_are_rejected(self):
         self.proposal['layouts'][0]['register_count'] = 99
@@ -121,20 +126,21 @@ class ReviewTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'counts disagree'):
             self.load()
 
-    def test_exclusion_scope_is_instance_aware(self):
-        for instance in ('TMR61', 'TMR610', 'TMR6_COMMON', 'USBFS', 'USBHS', 'HRPWM_COMMON', 'SDIOC2'):
-            with self.subTest(instance=instance):
-                self.assertTrue(export.is_excluded('ll', 'HC32F4A8', instance))
-                self.assertFalse(export.is_excluded('ddl', 'HC32F4A8', instance))
-        for instance in ('TMR0', 'TMR01', 'TMR21', 'TMR4_ECER', 'EFM2', 'PERIC', 'PKE'):
-            self.assertFalse(export.is_excluded('ll', 'HC32M458', instance))
-        self.assertTrue(export.is_excluded('ll', 'HC32M458', 'DFM'))
-        self.assertFalse(export.is_excluded('ll', 'HC32F175', 'DFM'))
-
-    def test_unapproved_exclusion_is_rejected(self):
+    def test_map_exclusion_is_authoritative(self):
+        # 排除范围由 map 的 status 驱动，不再依赖实例名前缀白名单。
         self.proposal['layouts'][0].update(status='excluded', tier=0, topic=None, version='')
         self.save()
-        with self.assertRaisesRegex(ValueError, 'exclusion scope mismatch'):
+        _, rows = self.load()
+        by_instance = {r['instance']: r for r in rows}
+        self.assertEqual(by_instance['I2C0']['status'], 'excluded')
+        self.assertEqual(by_instance['I2C0']['proposed_version'], '')
+        self.assertEqual(by_instance['I2C0']['target_file'], '')
+        self.assertEqual(by_instance['I2S0']['status'], 'proposed')
+
+    def test_excluded_layout_must_not_have_assignment(self):
+        self.proposal['layouts'][0].update(status='excluded', tier=0, topic=None)
+        self.save()
+        with self.assertRaisesRegex(ValueError, 'must not have an assignment'):
             self.load()
 
     def test_marker_update_preserves_surrounding_evidence(self):

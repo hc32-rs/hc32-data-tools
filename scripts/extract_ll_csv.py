@@ -35,6 +35,8 @@ try:
 except ImportError:  # pragma: no cover
     PdfReader = None
 
+from support_scope import unsupported as unsupported_series
+
 # --------------------------------------------------------------------------
 # 常量
 # --------------------------------------------------------------------------
@@ -1132,6 +1134,8 @@ def validate(all_dma, all_peri, stats):
 NOTES_TMPL = """# LL 侧 CSV 提取说明（hc32-data-tools/extract_ll_csv.py 自动生成）
 
 来源：`xh_ll_sdk/` 下 27 个 SDK 目录（设备头、hc32_ll_driver、SVD、DS/RM PDF）。
+HC32F175 已暂停支持（IP 多代缝合，见 hc32-data-tools/scripts/support_scope.py），
+默认跳过，本目录各表不含其行；`--series HC32F175` 可强制单独重提。
 输出：本目录 5 个 CSV，列头见 `hc32-data-tools/CSV_SCHEMA.md`。可重复运行：
 `python3 hc32-data-tools/extract_ll_csv.py [--sdk-root X] [--out Y] [--series ...]`
 
@@ -1160,9 +1164,10 @@ NOTES_TMPL = """# LL 侧 CSV 提取说明（hc32-data-tools/extract_ll_csv.py �
   `*_COLERR`、软件中断 `*_SWI_IRQ`；DMA 自身 TC/BTC 事件按 RM 可作触发源，保留；
 - 通道数取自 `hc32_ll_aos.h` 的 `AOS_DMA<x>_<n>` 宏（每单元 4 或 8 通道），
   DMA 实例名取自 SVD；F115/F120 无 DMA 外设，dma 行数为 0。
-- 例外（F175，旧式外设集）：无 AOS/EVT_SRC，DMAC 用固定请求编号——
-  `DMA_<信号>_REQ = (0xNN << DMAC_CONFA0_TRISEL_POS)`（0x40~0x55），写入各通道
-  CONFA0.TRISEL 选择请求源，4 个通道（CH0~3）仍为自由路由，channel 填 `0-3`。
+- 例外（已暂停支持的 F175，旧式外设集，仅作 SDK 语义记录）：无 AOS/EVT_SRC，
+  DMAC 用固定请求编号——`DMA_<信号>_REQ = (0xNN << DMAC_CONFA0_TRISEL_POS)`
+  （0x40~0x55），写入各通道 CONFA0.TRISEL 选择请求源，4 个通道（CH0~3）仍为
+  自由路由。
 
 ## 其它假设与说明
 
@@ -1244,6 +1249,10 @@ def main():
             continue
         series = m.group(1)
         if only and series not in only:
+            continue
+        skip = unsupported_series("ll").get(series)
+        if skip and not only:
+            print("== %s 跳过：%s" % (series, skip))
             continue
         print("== %s (%s)" % (series, sdk))
         warns = []
