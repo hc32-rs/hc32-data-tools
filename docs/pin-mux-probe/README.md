@@ -62,7 +62,7 @@ SPI1..4 各 128~134 条（含 CK/SSx 独立列路由）。
 
 ## 路由可表达性分类（对照现有 `Pin.func` 结构）
 
-现有结构：family YAML 外设项 `pins: [{pin, signal, func}]`
+现有结构：型号路由 YAML 的外设项 `pins: [{pin, signal, func}]`
 （`hc32-data-serde/src/chip/core/peripheral.rs:45`，
 `func: Option<u8>` 已预留，metapac 元数据链路已通）。
 
@@ -133,13 +133,14 @@ python3 hc32-data-tools/docs/pin-mux-probe/extract_f003_f460_pinmux.py
 # 断言全绿后重写两个 CSV，并回显 SDK 抽查结果
 ```
 
-## Agent 2 消费指引
+## 生成链消费方式
 
-- 两 CSV 同列头，可直接按 `(series, pad)` 合并进 family YAML 的外设
-  `pins:` 段：`pin`=pad（F003 的 Pxy 需按系列映射为 Pin::parse 的
-  `P<port><num>`；F460 的 PA9 即原生格式），
-  `signal`=signal，`func`=selector_value（均为 u8 范围内的 fsel 值）。
-- 合并时注意同一 (peripheral, signal) 在 F460 有 32 个焊盘候选——HAL 侧
-  引脚选择器直接读 `pins:` 列表即可，无需另建选择位表。
-- 无法用 `Pin.func` 表达的三类（模拟/固定功能/副功能）如上表所列，
-  原始条件已留档，补 ADC/CMP/调试引脚前勿将其并入 func 值。
+- `csv_to_yaml.py` 将 F460 焊盘路由与封装管脚表逐封装求交集，写入
+  `data/pins/<series>_<PART>.yaml`。芯片 YAML 以 `include_pins` 引用本轮生成
+  的型号文件，最终路由落在 PAC 元数据的 `Peripheral.pins`。
+- 当前 JCTA 有 539 条路由，PCTB 有 1,048 条。USART4 RX 的 PB9 两种封装均引出，
+  USART4 TX 的 PE6 只出现在 PCTB。F003 的 28 条焊盘路由待封装表补齐后接入。
+- 样本 `fsel` 路由映射为 `pin=pad`、`signal=signal`、
+  `func=selector_value`。模拟、固定功能、副功能的原始条件见上表。
+
+多封装归一、错误处理和接入登记见工具仓库 README 的 `data/pins/` 一节。 [工具仓库 README](../../README.md)

@@ -151,8 +151,11 @@ python3 hc32-data-tools/scripts/export_peripheral_versions.py --check
   `hdsc_fetch_products.py`（官网 → `website_chips.csv`）。
 - **合并规则**：DS 行优先；website 行补缺字段、补缺型号（F120/M120 无 DS，
   全靠官网行）；website 系列名经 `SERIES_ALIAS` 映射（HC32L072→HC32L07x 等）。
+  同型号的不同 DS 封装全部写入 `packages`，例如 F003C4PA/F005C6PA 同时有
+  SOP20 和 TSSOP20。其余 DS 字段及 `_raw` 以首行和官网补缺结果为准。
 - **内容**：name / packages / `include_memory` / `memory_sizes` / docs /
-  cores（`include_peripherals` + `include_interrupts` + `include_dma_channels`）/
+  cores（`include_peripherals`、`include_interrupts`、`include_dma_channels`、
+  已接入型号的 `include_pins`）/
   `_raw`（原始 CSV 字段留档）。CPU 类型来自 `svd_meta.csv`（SVD `<cpu>`）。
 
 ### `data/family/<series>.yaml`（外设实例）
@@ -177,8 +180,18 @@ python3 hc32-data-tools/scripts/export_peripheral_versions.py --check
      `UNRESOLVED_INTERRUPTS` 登记后单独报告（头枚举跳号等证据不足项，
      当前 6 条：F472/A472 PLA、F334/F336 PLAINT、K116/K118 LVD）；
      登记之外的新未解析项使脚本非零退出，防止悄悄带进生成链。
-- **注意**：引脚复用（pins）按**型号×封装**粒度另存 `data/pins/`（见下节），
-  family YAML 只承载实例物理事实，不混路由数据。
+- **时钟**：`rcc.enable` 使用提取的寄存器名和 SDK 门控标识。
+  `RCC_META` 分别登记 `rcc.polarity`（`high` 写 1 使能、`low` 写 0 使能）、
+  `rcc.bus`（访问总线域）和外设级 `kernel_clock`（功能时钟来源）。当前只登记
+  F420/F460，其他 44 个系列省略这三个字段。F420 的 APB0 样本使用 `APB0EN`
+  门控，USART0–3 取 `pclk0`。F460 USART1/2 属于 APB1，USART3/4 属于 APB2，
+  四者的内部功能时钟均取 `pclk1`。
+- **时钟形态**：`kernel_clock: {type: fixed, name: pclk1}` 表示已登记的内部
+  功能时钟固定连接。运行时分频和外部时钟模式由 HAL 处理。
+  `selectable` 形态包含 `register`、`field` 和编码字符串到时钟节点的
+  `options` 映射，例如 `{'0x0': pclk2}`。该形态已有生成支持，当前数据尚无实例。
+- **引脚复用**：先逐封装求交集，再按型号输出到 `data/pins/`（见下节），
+  family YAML 保存系列共享的外设实例数据。
 
 ### `data/interrupts/<series>.yaml`（中断向量）
 
@@ -214,8 +227,8 @@ python3 hc32-data-tools/scripts/export_peripheral_versions.py --check
   合并到 `core.peripherals[].pins`（ch32-data 同构 `{pin, signal, func}`，
   `func`=FSEL/Px_sel 编码，模拟/固定功能/副功能三类暂不表达，证据留档探针 README）。
 - **已接入**：HC32F460 样本 JCTA（LQFP48，539 条）/ PCTB（LQFP100，1048 条），
-  F003 路由表已备但封装管脚表未提取，暂不接入。新系列补两探针数据 +
-  登记 `PIN_ROUTE_SOURCES` 即自动进入生成链。
+  F003 路由表已备，待封装管脚表补齐后接入。扩面时在 `PIN_ROUTE_SOURCES` 登记
+  两张探针 CSV，在 `PIN_TERMINAL_SAMPLE_PARTS` 登记纳入生成的型号和样本封装。
 
 ### `data/memory/<series>_F<n>S<n>.yaml`（内存布局）
 
@@ -280,7 +293,7 @@ M4F（`hc32f460jcta@thumbv7em`）构建/doc + host 元数据测试。全量 214 
    `data/pins/` 一节）：路由×封装交集进入 chips YAML（`include_pins`）→
    chip JSON → metapac `PeripheralPin`（`pin/signal/func`）。剩余工作按
    外设类别与系列扩展两探针（`docs/pin-mux-probe`、`docs/pin-probe`），
-   `PIN_ROUTE_SOURCES` 逐系列登记；模拟复用/固定功能/副功能三类的
+   按 `data/pins/` 一节的方式登记系列与型号；模拟复用/固定功能/副功能三类的
    结构表达待后续设计（证据已留档探针 README）；
 2. ~~**SVD MODE 拆分实例**映射待建立~~ **已解决**：`csv_to_yaml.py` 现按
    `_?MODE(0|1|23)$` 后缀把 `register_versions.csv` 的 SVD 视图名
@@ -353,3 +366,15 @@ M4F（`hc32f460jcta@thumbv7em`）构建/doc + host 元数据测试。全量 214 
   （带 `hc32-data-tools-<commit>` 溯源 tag）。需要在仓库 Secrets 配置
   `METAPAC_TOKEN`（对 `hc32-rs/hc32-metapac` 有 Contents 写权限的 PAT，
   细节见 workflow 文件头注释）。
+
+在工具仓库根目录运行额外的引脚与时钟样本检查：
+
+```sh
+python3 scripts/test_emit_pins.py
+./d test-metapac hc32f420jatb thumbv7em-none-eabihf
+cargo test --manifest-path build/hc32-metapac/Cargo.toml --no-default-features --features metadata,hc32f460pctb
+```
+
+后两条使用 `./d gen` 生成的 crate。RCC 测试覆盖 F420 JATB 与 F460 JCTA，
+引脚测试覆盖 F460 JCTA 与 PCTB。两套测试均要求 `metadata` feature，
+F460 JCTA 已由常规 CI 运行。

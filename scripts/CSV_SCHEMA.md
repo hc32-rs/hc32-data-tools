@@ -1,8 +1,8 @@
 # HC32 数据提取 CSV 统一模式（subagent 契约）
 
-两个提取脚本（DDL 侧与 LL 侧）必须产出**完全相同的列头**，供 `tools/csv_to_yaml.py`
-统一转换成 ch32-data 风格的 YAML（`chips/`、`family/`、`peripherals/`、`interrupts/`、
-`dma/`、`memory/`，参考 `/Volumes/aigo_1t/Github/ch32-rs/ch32-data/data`）。
+两侧提取脚本共享型号、外设实例、中断和内存的列契约。DMA 保留各自的编码列，
+由 `scripts/csv_to_yaml.py` 统一转换成 ch32-data 风格的 YAML
+（`chips/`、`family/`、`interrupts/`、`dma/`、`memory/`）。
 
 通用约定：
 
@@ -15,7 +15,7 @@
   `hc32l186_ddl` → `HC32L18x`，与数据手册标题一致）。
 - 一次解析失败不阻塞其它系列；失败系列在 CSV 中留空并在脚本报告中列出。
 
-## chips.csv — 型号主表（一行 = 一个订货型号）
+## chips.csv — 型号主表（一行 = 一个型号和封装组合）
 
 来源：数据手册 DS PDF 的“型号功能对比表 / 订货信息 / 特性”页，型号一般形如
 `HC32F460PETB-LQFP100`。`part_no` 一律去掉 `-封装` 后缀。
@@ -27,7 +27,9 @@ part_no,series,freq_mhz,flash_kb,sram_kb,package,pin_count,gpio,vdd_min,vdd_max,
 
 - `freq_mhz`：最大主频，纯数字（如 `200`）。
 - `flash_kb` / `sram_kb`：KB 纯数字（如 `512`、`192`）。
-- `package`：如 `LQFP100`、`QFN48`（多个用 `;` 分隔并按 pin_count 填第一个）。
+- `package`：每行一个封装，如 `LQFP100`、`QFN48`。同型号的不同 DS 封装分行，
+  `pin_count` 对应该行封装。生成型号 YAML 时，所有封装汇入 `packages`，
+  其余型号字段以首行和官网补缺结果为准。
 - `gpio`：GPIO 数量，纯数字。
 - `vdd_min`/`vdd_max`：如 `1.8` / `3.6`。
 - 外设计数列：纯数字或留空；`adc` 复数通道时填位数可写 `other`。多单元用 `;`
@@ -70,7 +72,7 @@ series,dma,channel,request[,trigger_id][,channels]
   枚举（A052/F052=5、F420=6、其余=2，RM 第 12 章佐证），供
   `core.dma_channels` 控制器通道清单使用。
 
-## peripherals.csv — 外设实例（一行 = 一个外设实例，喂 family/peripherals YAML）
+## peripherals.csv — 外设实例（一行 = 一个外设实例，生成 family YAML）
 
 来源：SVD（`<repo>/svd/*.svd`，地址权威）+ 设备头时钟使能位（`FCG*`/`PWC_FCG*`）。
 
@@ -81,14 +83,12 @@ series,instance,kind,base_address,bus,fcg_reg,fcg_field,interrupts,notes
 - `instance`：如 `USART1`、`TIMA0`、`GPIOA`。
 - `kind`：小写外设类别（去数字后缀）：`usart`、`tima`、`gpio`、`adc`…
 - `base_address`：`0x` 十六进制，取自 SVD。
-- `bus`：`AHB`/`APB1`/…（RM/SVD 可查则填，否则空）。注意：family YAML 侧的
-  `rcc.bus`（小写总线域）**不**从本列推导，由 `csv_to_yaml.py` 的 `RCC_META`
-  登记表输出——当前仅 HC32F420、HC32F460 两系列已登记（RM 逐条人工核对），
-  其余系列留空为未确认项，禁止从 FCG 编号推导总线名。
-- `fcg_reg`/`fcg_field`：时钟门控寄存器与位域（如 `FCG1`/`FCG1_USART1_CLKEN`；
-  DDL M0 系列形如 `PWC_FCG1`/`PWC_FCG1_USART1EN`）。GPIO 等无门控留空。
-  门控极性不进 CSV：DDL 门控 1=使能、LL PWC_FCG* 0=使能由 `RCC_META` 按系列
-  输出 `rcc.polarity`（同样仅两系列已登记，其余留空）。
+- `bus`：预留列，当前两侧提取均留空。family YAML 的 `rcc.bus` 来自
+  `RCC_META` 中经 RM 核对的访问总线域。FCG 编号与总线域独立。
+- `fcg_reg`/`fcg_field`：门控寄存器名及提取到的 SDK 标识，例如 F420
+  `APB0EN`/`SysctrlPeripheralUsart0`、F460 `FCG1`/`PWC_FCG1_USART1`。
+  GPIO 等无门控时留空。`rcc.polarity` 和 `kernel_clock` 同样由 `RCC_META`
+  生成。时钟补充信息当前只登记 F420/F460，具体覆盖见工具仓库 README。
 - `interrupts`：该实例的中断**信号名**，`;` 分隔，按 SVD `<interrupt>` 节点顺序
   提取（LL 侧剥 `_IRQn` 后缀）。信号名与 interrupts.csv 的 `name` 不一定同形
   （SVD 与设备头拼写可能异名，如 F472 信号 `ADC_1` vs 头枚举 `ADC1`）；

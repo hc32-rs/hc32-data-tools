@@ -17,12 +17,22 @@
 hc32-metapac = { version = "0.1", features = ["hc32f460jeta"] }
 ```
 
-- `pac`（默认）：寄存器访问层，每外设一个模块，`hc32_metapac::USART0.cr().write(|w| ..)`
-- `metadata`：编译期元数据 `hc32_metapac::METADATA`（外设/中断/DMA/内存布局）
-- `rt`：中断向量表（需配合 cortex-m-rt），`#[hc32_metapac::interrupt]`
+- `pac`（默认）：寄存器访问层，例如 F460 的 `hc32_metapac::USART1`。
+- `metadata`：编译期元数据 `hc32_metapac::metadata::METADATA`，含外设、中断、DMA 和内存布局。
+- `rt`：生成中断向量表和 `device.x` 支持，配合 `cortex-m-rt` 使用。
 - `memory-x`：生成链接脚本 memory.x（FLASH/SRAM 布局）
 
 芯片选择 feature 为完整型号小写，如 `hc32f003c4pa`、`hc32f460jeta`。
+
+### 外设元数据覆盖
+
+- `Peripheral.pins` 当前提供 F460 JCTA（LQFP48）和 PCTB（LQFP100）的 UART/SPI
+  路由，已按型号封装过滤。其他型号的空列表表示当前没有录入路由。
+- `rcc.polarity`、`rcc.bus` 和 `kernel_clock` 当前仅在 F420/F460 的已核对实例
+  中提供。缺失值表示待确认。访问总线与功能时钟独立，例如 F460 USART3 属 APB2，
+  内部功能时钟取 PCLK1。
+- `usart_ddl_v1` 的 `CR1.TOE` 同时提供原有数值访问器
+  `toe()/set_toe(u8)` 和类型化访问器 `toe_val()/set_toe_val(vals::Toe)`。
 
 ## License
 

@@ -523,11 +523,16 @@ def emit_family(repo: Path, ctx: dict, inst_ver: dict,
                 if refs:
                     item["interrupts"] = refs
             items.append(item)
+        pin_note = (
+            "# 已登记型号的引脚复用由 chips YAML 的 include_pins 引用型号级 data/pins/。\n"
+            if s in PIN_ROUTE_SOURCES
+            else "# 引脚复用（pins）暂缺，待从数据手册 GPIO 章节补齐。\n"
+        )
         header = (f"# {s} 系列外设实例（hc32-data-tools/csv_to_yaml.py 生成）。\n"
                   f"# 地址来自 SVD；时钟门控来自设备头 FCG/PWC 位定义；\n"
                   f"# MODE 拆分定时器（TIMx/ATIMx）用 views 挂 SVD 视图（同基址寄存器布局\n"
                   f"# 叠影，工作模式由控制寄存器 MD 位运行时选择），地址/门控/中断在物理实例；\n"
-                  f"# 引脚复用（pins）暂缺，待从数据手册 GPIO 章节补齐。\n")
+                  f"{pin_note}")
         outputs[s] = header + dump_yaml(items)
         stats[s] = len(items)
     # MODE 视图关联报告：逐实例列出 物理名@地址 → 视图(SVD名)=版本。
