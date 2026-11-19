@@ -414,6 +414,8 @@ pub struct Peripheral {
     #[serde(default)]
     pub rcc: Option<PeripheralRcc>,
     #[serde(default)]
+    pub kernel_clock: Option<PeripheralKernelClock>,
+    #[serde(default)]
     pub pins: Vec<PeripheralPin>,
     #[serde(default)]
     pub dma_channels: Vec<PeripheralDmaChannel>,
@@ -431,6 +433,7 @@ impl std::fmt::Debug for Peripheral {
             .field("registers", &self.registers)
             .field("views", &self.views)
             .field("rcc", &self.rcc)
+            .field("kernel_clock", &self.kernel_clock)
             .field("pins", &self.pins)
             .field("dma_channels", &self.dma_channels)
             .field("interrupts", &self.interrupts)
@@ -445,10 +448,60 @@ pub struct PeripheralInterrupt {
 }
 
 /// HC32 时钟门控：PWC/FCG 使能寄存器位（如 PERI_CLKEN.SysctrlPeripheralAdcBgr）。
+/// polarity：high = 写 1 使能（DDL）；low = 写 0 使能（LL，复位 0xFFFF_FFFF）。
+/// bus：RM 存储器映射标注的总线域（HAL 据此路由 PCLK 频率）。
 #[derive(Debug, Eq, PartialEq, Clone, Deserialize)]
 pub struct PeripheralRcc {
     #[serde(default)]
     pub enable: Option<PeripheralRccRegister>,
+    #[serde(default)]
+    pub polarity: Option<String>,
+    #[serde(default)]
+    pub bus: Option<String>,
+}
+
+/// 外设功能（内核）时钟来源：fixed（由总线域唯一决定）或
+/// selectable（专用选择寄存器 + 编码值→时钟节点映射）。
+/// serde 别名与 hc32-data-serde 的 YAML 小写风格保持一致。
+///
+/// Debug 手写（派生版会把 BTreeMap 输出成 `{ "k": "v", .. }` 的 map 字面量，
+/// 不是合法 Rust）；输出 metapac 公开类型所需的元组切片字面量
+/// `&[("k", "v"), ..]`。stringify 后即生成代码，改动需过全量 gen + 双芯片测试。
+#[derive(Eq, PartialEq, Clone, Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum PeripheralKernelClock {
+    Fixed { name: String },
+    Selectable {
+        register: String,
+        field: String,
+        #[serde(default)]
+        options: std::collections::BTreeMap<String, String>,
+    },
+}
+
+impl std::fmt::Debug for PeripheralKernelClock {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PeripheralKernelClock::Fixed { name } => {
+                write!(f, "Fixed {{ name: {name:?} }}")
+            }
+            PeripheralKernelClock::Selectable {
+                register,
+                field,
+                options,
+            } => {
+                let pairs: Vec<String> = options
+                    .iter()
+                    .map(|(k, v)| format!("({k:?}, {v:?})"))
+                    .collect();
+                write!(
+                    f,
+                    "Selectable {{ register: {register:?}, field: {field:?}, options: &[{}] }}",
+                    pairs.join(", ")
+                )
+            }
+        }
+    }
 }
 
 #[derive(Debug, Eq, PartialEq, Clone, Deserialize)]

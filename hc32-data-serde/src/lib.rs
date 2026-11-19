@@ -141,4 +141,51 @@ mod tests {
                 });
         }
     }
+
+    /// kernel_clock 两种形态 serde 往返：
+    /// - selectable 的 options 键序须稳定（BTreeMap）；
+    /// - metapac-gen 侧手写 Debug 把 options 输出成元组切片字面量，
+    ///   这里固定住「编码值」的字符串形态，防止上下游格式漂移。
+    #[test]
+    fn test_kernel_clock_selectable_roundtrip() {
+        let src = r"- name: ADC1
+  address: 0x40040000
+  registers:
+    kind: adc
+    block: ADC
+    version: ll_v3_1
+  rcc:
+    enable:
+      register: FCG3
+      field: PWC_FCG3_ADC1
+    polarity: low
+    bus: apb4
+  kernel_clock:
+    type: selectable
+    register: PERICKSEL
+    field: PERICKSEL
+    options:
+      '0x0': pclk2
+      '0x8': mpllp
+      '0x9': mpllq
+";
+        let list: Vec<chip::core::Peripheral> = serde_yaml::from_str(src).unwrap();
+        let p = list.into_iter().next().unwrap();
+        let kc = p.kernel_clock.as_ref().unwrap();
+        match &kc.source {
+            chip::core::peripheral::KernelClockSource::Selectable { options, .. } => {
+                // BTreeMap 序稳定：0x0 < 0x8 < 0x9（字符串序）
+                let keys: Vec<&str> = options.keys().map(|s| s.as_str()).collect();
+                assert_eq!(keys, ["0x0", "0x8", "0x9"]);
+            }
+            other => panic!("应为 Selectable，实得 {other:?}"),
+        }
+        let out = serde_yaml::to_string(&p).unwrap();
+        let p2: chip::core::Peripheral = serde_yaml::from_str(&out).unwrap();
+        assert_eq!(p, p2);
+        // 固定形态：往返后仍是小写 type + 编码字符串键
+        // （serde_yaml 对非标识符键输出单引号形态）
+        assert!(out.contains("type: selectable"));
+        assert!(out.contains("'0x0': pclk2"));
+    }
 }

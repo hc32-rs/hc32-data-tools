@@ -170,6 +170,54 @@ fn main() -> anyhow::Result<()> {
                     }
                 }
 
+                // 引脚路由（型号级单文件）：文件格式 { 实例: { pins: [...] } }，
+                // 按实例名挂到已合并的 core.peripherals 对应项（不新增实例）。
+                // Peripheral.pins 无封装维度——多于一个文件意味着试图给不同
+                // 封装各挂一组 pins，合并会丢失封装归属并产生重复，直接拒绝。
+                if let Some(inc_paths) = core.include_pins.take() {
+                    anyhow::ensure!(
+                        inc_paths.len() <= 1,
+                        "chip {} include_pins 引用 {} 个文件 {:?}：\
+                         Peripheral.pins 无封装维度，多封装路由须先按型号归一\
+                         （csv_to_yaml.py emit_pins 已强制），不能逐封装挂接",
+                        chip.name,
+                        inc_paths.len(),
+                        inc_paths
+                    );
+                    for inc_path in inc_paths {
+                        let pins_yaml_path = meta_yaml_path.parent().unwrap().join(&inc_path);
+                        let content = std::fs::read_to_string(&pins_yaml_path)?;
+                        let periph_pins: std::collections::BTreeMap<
+                            String,
+                            hc32_data_serde::chip::core::peripheral::PeripheralWithPins,
+                        > = serde_yaml::from_str(&content)?;
+                        for (inst, entry) in periph_pins {
+                            let Some(p) = core
+                                .peripherals
+                                .iter_mut()
+                                .find(|p| p.name == inst)
+                            else {
+                                return Err(anyhow::anyhow!(
+                                    "chip {} include_pins 引用外设 {} 不在 peripherals（{}）",
+                                    chip.name,
+                                    inst,
+                                    pins_yaml_path.display()
+                                ));
+                            };
+                            if !p.pins.is_empty() {
+                                eprintln!(
+                                    "WARNING: chip {} peripheral {} pins 已有 {} 条，{} 追加",
+                                    chip.name,
+                                    inst,
+                                    p.pins.len(),
+                                    pins_yaml_path.display()
+                                );
+                            }
+                            p.pins.extend(entry.pins);
+                        }
+                    }
+                }
+
                 // Names are assigned upstream; unresolved instances retain the existing address-only fallback.
                 // MODE 拆分定时器走 views 列表（物理项 registers=None），
                 // 每视图自带 kind/version，不是降级对象。

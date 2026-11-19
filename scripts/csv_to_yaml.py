@@ -113,6 +113,58 @@ def series_from_part(part: str, repo_series: set[str]) -> str | None:
     return None
 
 
+# ---------- 门控极性 / 总线域 / 功能时钟来源（RM 已核对系列表） ----------
+# 覆盖范围：当前仅 HC32F420、HC32F460 两系列（人工逐条核对过 RM），
+# 其余 44 个系列三个键全部留空（不输出），属未确认项——这是保守行为，
+# 防止从 FCG 编号或 SDK 命名推导出未经核实的总线/极性；批量回填
+# 需逐系列读 RM 存储器映射表与门控位描述后登记到本表。
+# polarity：DDL 系列 SYSCTRL_*EN/PERI*_CLKEN 门控 1=使能（SDK Sysctrl_SetPeripheralGate
+#           / SYSCTRL_PeriphClkEnable 写 bFlag）；LL 系列 PWC_FCG0..3 门控 0=使能
+#           （SDK FCG_Fcg<x>PeriphClockCmd ENABLE 分支 CLR_REG32_BIT；复位值 0xFFFF_FFFF）。
+#           注意：polarity 只随登记进 RCC_META 的系列输出——虽然按 SDK 域
+#           DDL=high/LL=low 规律性强，其余系列未逐个核对前仍不输出。
+# bus：RM 存储器映射表的外设所属总线域，逐实例登记（禁止从 FCG 编号推导——
+#      F460 FCG1 同时挂 APB1 USART1/2 与 APB2 USART3/4）。
+# kernel_clock：外设功能时钟的时钟树来源。type=fixed 表示由总线域唯一决定；
+#      type=selectable 表示有专用选择寄存器（编码值→时钟节点名）。
+# 证据（文件 + 表号）：
+#   HC32F420：RM_HC32F420_Rev1.30 表1-1/1-2（APB0 0x4000_0000..0x4000_7FFF）；
+#             图3-1 时钟架构图 To USART0..3 由 SYSCTRL_APBEN0 门控、PCLK0 供电；
+#             SDK usart.c USART_BaudRateCal(..., SYSCTRL_GetPCLK0(), ...)。
+#   HC32F460：RM_HC32F460_Rev1.71 表1-1（0x4001_D000 USART_1 行标注 APB1 时钟:PCLK1；
+#             0x4002_1000/1400 USART_3/4 行标注 APB2 时钟:PCLK1）；
+#             RM 5.7.14 PWC_FCG1 位描述 b24=USART1（0=使能）；
+#             SDK hc32_ll_usart.c USART_GetBusClockFreq 读 SCFGR.PCLK1S。
+
+_RCC_F420_APB0 = "apb0"
+
+RCC_META: dict = {
+    "HC32F420": {
+        "polarity": "high",
+        # RM 表1-2：0x4000_0000-0x4000_7FFF 全部 APB0 域（USART0-3/I2C0-1/SPI0-1/
+        # CTIM0-2/ATIM0/ATIM3）；APB1EN 门控的 ADC/WWDT/CTRIM/LVD/VC 属 APB1 域，
+        # AHB0EN 的 DMAC/CRC/FLASH 属 AHBPR0，AHB1EN 的 GPIOA-D 属 AHBPR1。
+        "bus": {i: _RCC_F420_APB0 for i in
+                ("USART0", "USART1", "USART2", "USART3",
+                 "I2C0", "I2C1", "SPI0", "SPI1",
+                 "BTIM0", "BTIM1", "BTIM2", "BTIM3", "BTIM4", "BTIM5",
+                 "BTIM6", "BTIM7", "BTIM8",
+                 "GTIM0", "GTIM1", "GTIM2", "ATIM0", "ATIM3")},
+        "kernel_clock": {i: {"type": "fixed", "name": "pclk0"} for i in
+                         ("USART0", "USART1", "USART2", "USART3")},
+    },
+    "HC32F460": {
+        "polarity": "low",
+        # RM 表1-1：USART_1/2 属 APB1 域（0x4001_x000，时钟:PCLK1），
+        # USART_3/4 属 APB2 域（0x4002_x000，时钟同为 PCLK1）。
+        "bus": {"USART1": "apb1", "USART2": "apb1",
+                "USART3": "apb2", "USART4": "apb2"},
+        "kernel_clock": {i: {"type": "fixed", "name": "pclk1"} for i in
+                         ("USART1", "USART2", "USART3", "USART4")},
+    },
+}
+
+
 # ---------- 各输出段 ----------
 
 
@@ -431,13 +483,23 @@ def emit_family(repo: Path, ctx: dict, inst_ver: dict,
                 if ver["version"]:
                     item["registers"]["version"] = ver["version"]
             rcc = {}
-            if (r.get("bus") or "").strip():
-                rcc["bus_clock"] = r["bus"].strip()
             if (r.get("fcg_reg") or "").strip():
                 rcc["enable"] = {
                     "register": r["fcg_reg"].strip(),
                     "field": (r.get("fcg_field") or "").strip(),
                 }
+                # 门控极性 + 总线域 + 功能时钟来源（RM 已核对系列表，
+                # 见 emit_peripherals 顶部 RCC_META 注释；未登记系列不输出，
+                # HAL 侧视为未确认）。
+                meta = RCC_META.get(s)
+                if meta:
+                    rcc["polarity"] = meta["polarity"]
+                    bus = meta.get("bus", {}).get(inst)
+                    if bus:
+                        rcc["bus"] = bus
+                    kc = meta.get("kernel_clock", {}).get(inst)
+                    if kc:
+                        item["kernel_clock"] = kc
             if rcc:
                 item["rcc"] = rcc
             ints = [x.strip() for x in (r.get("interrupts") or "").split(";") if x.strip()]
@@ -523,7 +585,8 @@ def _dma_controller_channels(ctx: dict) -> dict[str, int]:
     return out
 
 
-def emit_chips(repo: Path, ctx: dict, mem_files: dict) -> list[Path]:
+def emit_chips(repo: Path, ctx: dict, mem_files: dict,
+               pin_parts: set[str]) -> list[Path]:
     out_dir = repo / "data" / "chips"
     out_dir.mkdir(parents=True, exist_ok=True)
     repo_series = {r["series"] for r in ctx["peripherals"]}
@@ -536,12 +599,19 @@ def emit_chips(repo: Path, ctx: dict, mem_files: dict) -> list[Path]:
     web_by_part: dict[str, dict] = {}
     for r in ctx["website_chips"]:
         web_by_part.setdefault(r["part_no"], r)
+    # 同 part_no 多行（如 F003/F005 C?PA 的 SOP20+TSSOP20）逐行保留 package，
+    # 其余列取首行（DS 订货表多行间仅封装不同）；之前 dict() 覆盖会丢掉一种封装
+    part_pkgs: dict[str, list[str]] = {}
     merged: dict[str, dict] = {}
     for r in ctx["chips"]:
         part = r["part_no"].strip()
         if not part or not re.match(r"^HC", part):
             continue  # 跳过占位/空行
-        merged[part] = dict(r)
+        pkgs = part_pkgs.setdefault(part, [])
+        pkg = (r.get("package") or "").strip()
+        if pkg and pkg not in pkgs:
+            pkgs.append(pkg)
+        merged.setdefault(part, dict(r))
     for part, wrow in web_by_part.items():
         s = map_series(wrow["series"])
         if part in merged:
@@ -564,11 +634,13 @@ def emit_chips(repo: Path, ctx: dict, mem_files: dict) -> list[Path]:
                 s = row["series"] = s2
             else:
                 continue
-        pkg = (row.get("package") or "").strip()
+        # packages：同型号多封装全量列出（ch32-data 同构字段本就是列表）
+        pkgs = part_pkgs.get(part) or [(row.get("package") or "").strip()]
+        pkgs = [p for p in pkgs if p]
         doc = {
             "name": part,
             "family": s,
-            "packages": [{"name": part, "package": pkg}] if pkg else [],
+            "packages": [{"name": part, "package": p} for p in pkgs],
         }
         f, sz = (row.get("flash_kb") or "").strip(), (row.get("sram_kb") or "").strip()
         if (s, f, sz) in mem_files and s in mem_base_series:
@@ -596,6 +668,9 @@ def emit_chips(repo: Path, ctx: dict, mem_files: dict) -> list[Path]:
         }
         if (repo / "data" / "interrupts" / f"{s}.yaml").exists():
             core_dict["include_interrupts"] = f"../interrupts/{s}.yaml"
+        # 仅挂接本轮 emit_pins 已验证并写出的型号。
+        if part in pin_parts:
+            core_dict["include_pins"] = [f"../pins/{s}_{part}.yaml"]
         dma_files = sorted((repo / "data" / "dma").glob(f"{s}_*.yaml"))
         if dma_files:
             core_dict["include_dma_channels"] = {
@@ -631,7 +706,148 @@ def emit_chips(repo: Path, ctx: dict, mem_files: dict) -> list[Path]:
     return written
 
 
-# ---------- 主流程 ----------
+# ---------- 引脚路由 × 封装管脚交集（pins 小样本） ----------
+
+# 数据源：两个探针（docs/ 下，可复现、断言全绿）：
+#   pin-mux-probe/  Agent1 路由表：<series>_<sample>.csv，pad→(peripheral,signal,fsel)
+#   pin-probe/      封装管脚表：hc32f460_pin_terminals.csv，
+#                   (part_or_package,terminal)→pad
+# 交集语义：路由的 pad 必须在该型号该封装的 GPIO 焊盘集合内，才挂进该型号。
+# 产出：data/pins/<series>_<PART>.yaml（型号级单文件；peripheral 实例 → pins 列表，
+# ch32-data 同构的 {pin, signal, func}），chips YAML 的 core.include_pins 引用。
+# 生成侧在 data-gen 按 include 合并（与 include_peripherals 同构）。
+
+# 探针路由表 → 系列路由清单。后续系列补 pins 数据时往这里加条目即可。
+PIN_ROUTE_SOURCES = {
+    # series: (路由 CSV 相对路径, 封装管脚 CSV 相对路径)
+    "HC32F460": ("docs/pin-mux-probe/f460_uart_spi_routes.csv",
+                 "docs/pin-probe/hc32f460_pin_terminals.csv"),
+    # F003 路由表已就绪（f003_uart_spi_routes.csv，28 条），
+    # 但封装管脚表未提取，无交集基准，暂不接入。
+}
+# 样本型号 → 封装名（pin-probe 契约）。
+PIN_TERMINAL_SAMPLE_PARTS = {
+    "HC32F460": {"HC32F460JCTA": "LQFP48", "HC32F460PCTB": "LQFP100"},
+}
+
+
+def _pin_probe_root() -> Path:
+    return Path(__file__).resolve().parents[1]  # hc32-data-tools/
+
+
+def read_pin_probe(series: str, relative_path: str) -> list[dict]:
+    path = _pin_probe_root() / relative_path
+    rows = read_csv(path)
+    if not rows:
+        raise SystemExit(f"emit_pins: {series} 引脚探针 CSV 缺失或没有数据行：{path}")
+    return rows
+
+
+def emit_pins(repo: Path, ctx: dict) -> dict[str, int]:
+    """路由表 × 封装管脚逐封装交集 → 按型号归组的 data/pins/<series>_<PART>.yaml。
+
+    只处理已有两种探针数据的系列；路由表覆盖的型号必须在 chips.csv 中
+    （packages 对得上封装），否则报错——防止路由表与型号表脱钩。
+    """
+    out_dir = repo / "data" / "pins"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stats: dict[str, int] = {}
+    written: set[str] = set()
+
+    # 型号 → [封装]（emit_chips 同口径：同型号多行全收）
+    part_pkgs: dict[tuple[str, str], list[str]] = defaultdict(list)
+    for row in ctx["chips"]:
+        part = row["part_no"].strip()
+        pkg = (row.get("package") or "").strip()
+        if part and part in PIN_TERMINAL_SAMPLE_PARTS.get(row["series"], {}):
+            pkgs = part_pkgs[(row["series"], part)]
+            if pkg and pkg not in pkgs:
+                pkgs.append(pkg)
+
+    for series, (route_path, terminal_path) in sorted(PIN_ROUTE_SOURCES.items()):
+        sample_parts = {
+            part: pkg for part, pkg in PIN_TERMINAL_SAMPLE_PARTS.get(series, {}).items()
+            if (series, part) in part_pkgs
+        }
+        if not sample_parts:
+            continue
+        routes = read_pin_probe(series, route_path)
+        terminals = read_pin_probe(series, terminal_path)
+        # 封装 → GPIO 焊盘集合（pin-probe kind=gpio 行）
+        pkg_pads: dict[str, set[str]] = defaultdict(set)
+        for t in terminals:
+            if t.get("kind") == "gpio":
+                pkg_pads[t["part_or_package"]].add(t["pad"])
+        for part, pkg in sample_parts.items():
+            pkgs = part_pkgs[(series, part)]
+            if pkg not in pkgs:
+                raise SystemExit(
+                    f"emit_pins: {series} 样本型号 {part} 的封装 {pkg} "
+                    f"不在 chips.csv（{pkgs}）")
+
+        # 交集完整性：路由表 pad 全集必须 ⊆ 封装管脚表已知焊盘（防管脚表漏行）
+        if pkg_pads:
+            all_route_pads = {r["pad"] for r in routes}
+            missing = all_route_pads - set().union(*pkg_pads.values())
+            if missing:
+                raise SystemExit(
+                    f"emit_pins: {series} 路由表 pad 不在任何封装管脚表中: "
+                    f"{sorted(missing)}")
+        # 校验路由表外设实例在 family YAML（peripherals.csv）中存在
+        insts = {r["instance"] for r in ctx["peripherals"]
+                 if r["series"] == series}
+        unknown = {r["peripheral"] for r in routes} - insts
+        if unknown:
+            raise SystemExit(
+                f"emit_pins: {series} 路由表外设不在 peripherals.csv: "
+                f"{sorted(unknown)}")
+
+        # 逐 (part, package) 求交集；**同型号多封装**按型号归组：
+        # 生成的 chips YAML 的 include_pins 是型号级单引用，Peripheral.pins
+        # 无封装维度——两个封装的路由完全一致时合并为型号级文件，
+        # 分歧或任一封装缺管脚表基准时**显式拒绝**（不静默合并/丢归属）。
+        by_part: dict[str, dict[str, dict]] = {}
+        for part in sorted(sample_parts):
+            for pkg_i in part_pkgs[(series, part)]:
+                pads = pkg_pads.get(pkg_i)
+                if not pads:
+                    raise SystemExit(
+                        f"emit_pins: {series} {part} 的封装 {pkg_i} 无管脚表数据，"
+                        f"无法求路由×封装交集（多封装型号拒绝合并："
+                        f"Peripheral.pins 无封装维度）")
+                hits = [r for r in routes if r["pad"] in pads]
+                inter: dict[str, list[dict]] = defaultdict(list)
+                for r in hits:
+                    inter[r["peripheral"]].append(
+                        {"pin": r["pad"], "signal": r["signal"],
+                         "func": int(r["selector_value"])})
+                # 文件条目形态 = serde PeripheralWithPins：{ 实例: { pins: [...] } }
+                # （inter 是 defaultdict，须转普通 dict 才能安全 dump_yaml）
+                inter_doc = {p: {"pins": list(pins)}
+                             for p, pins in sorted(inter.items())}
+                prev = by_part.get(part)
+                if prev is not None and prev != inter_doc:
+                    raise SystemExit(
+                        f"emit_pins: {series} {part} 的多封装路由存在分歧，"
+                        f"Peripheral.pins 无封装维度无法共存"
+                        f"（需引入按封装的路由结构后再接入该型号）")
+                by_part[part] = inter_doc
+        for part, inter_doc in sorted(by_part.items()):
+            pkgs = "+".join(part_pkgs[(series, part)])
+            n = sum(len(v["pins"]) for v in inter_doc.values())
+            header = (f"# {series} {part}（{pkgs}）引脚路由（csv_to_yaml.py 生成）。\n"
+                      f"# 来源：DS 表 2-1/2-2 引脚功能表（pin-mux-probe）× 表 2-1\n"
+                      f"# 封装管脚列（pin-probe）逐封装交集；{n} 条，func=FSEL 编码。\n")
+            name = f"{series}_{part}.yaml"
+            (out_dir / name).write_text(header + dump_yaml(inter_doc),
+                                        encoding="utf-8")
+            written.add(name)
+            stats[part] = n
+    prune(out_dir, written)
+    return stats
+
+
+
 
 def convert_repo(repo: Path) -> dict:
     PRUNED.clear()
@@ -656,7 +872,11 @@ def convert_repo(repo: Path) -> dict:
     mem_files = emit_memory(repo, ctx)
     stats["memory"] = len(mem_files)
     stats["family"] = emit_family(repo, ctx, inst_ver, views)
-    chips = emit_chips(repo, ctx, mem_files)
+    # chips YAML 只引用本轮验证通过的引脚路由。
+    pin_stats = emit_pins(repo, ctx)
+    if pin_stats:
+        stats["pins"] = pin_stats
+    chips = emit_chips(repo, ctx, mem_files, set(pin_stats))
     stats["chips"] = len(chips)
     return stats
 
@@ -665,7 +885,7 @@ def validate(repo: Path) -> list[str]:
     """逐个 yaml.safe_load 校验输出。"""
     errors = []
     n = 0
-    for sub in ("chips", "family", "interrupts", "dma", "memory", "registers"):
+    for sub in ("chips", "family", "interrupts", "dma", "memory", "registers", "pins"):
         for p in sorted((repo / "data" / sub).glob("*.yaml")):
             n += 1
             try:

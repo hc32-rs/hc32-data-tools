@@ -58,4 +58,9 @@ pub struct Core {
     pub include_dma_channels: Option<BTreeMap<String, String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub include_peripherals: Option<Vec<String>>,
+    /// 引脚路由（型号×封装粒度，data/pins/&lt;series&gt;_&lt;PART&gt;_&lt;PKG&gt;.yaml）。
+    /// 文件格式：{ <外设实例>: { pins: [{pin, signal, func}] } }，
+    /// data-gen 合并时按实例名挂到 core.peripherals 对应项。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include_pins: Option<Vec<String>>,
 }

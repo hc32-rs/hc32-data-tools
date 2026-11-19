@@ -147,6 +147,7 @@ pub struct Peripheral {
     /// MODE 拆分定时器的 SVD 视图（同基址布局叠影；与 `registers` 互斥）。
     pub views: &'static [PeripheralView],
     pub rcc: Option<PeripheralRcc>,
+    pub kernel_clock: Option<PeripheralKernelClock>,
     pub pins: &'static [PeripheralPin],
     pub dma_channels: &'static [PeripheralDmaChannel],
     pub interrupts: &'static [PeripheralInterrupt],
@@ -178,15 +179,35 @@ pub struct PeripheralInterrupt {
 }
 
 /// HC32 时钟门控：PWC/FCG 使能寄存器位（如 PERI_CLKEN.SysctrlPeripheralAdcBgr）。
+/// polarity：high = 写 1 使能（DDL SYSCTRL_*EN 系）；low = 写 0 使能（LL PWC_FCG*，
+/// 复位值 0xFFFF_FFFF）。None = 未确认，HAL 不得默认假设。
+/// bus：RM 存储器映射标注的访问总线域（apb0/apb1/…），HAL 据此路由 PCLK 频率。
+/// 禁止从 FCG 编号推导总线名（F460 FCG1 同时挂 APB1 与 APB2 外设）。
 #[derive(Debug, Eq, PartialEq, Clone)]
 pub struct PeripheralRcc {
     pub enable: Option<PeripheralRccRegister>,
+    pub polarity: Option<&'static str>,
+    pub bus: Option<&'static str>,
 }
 
 #[derive(Debug, Eq, PartialEq, Clone)]
 pub struct PeripheralRccRegister {
     pub register: &'static str,
     pub field: &'static str,
+}
+
+/// 外设功能（内核）时钟来源，与 rcc 门控解耦：
+/// - Fixed：由总线域唯一决定（USART：PCLK0/PCLK1），HAL 直接取对应 PCLK 频率；
+/// - Selectable：专用选择寄存器 + 编码值→时钟节点映射（如 F460 CMU_PERICKSEL
+///   对 ADC/DAC/TRNG），HAL 按当前编码值查表取频率。
+#[derive(Debug, Eq, PartialEq, Clone)]
+pub enum PeripheralKernelClock {
+    Fixed { name: &'static str },
+    Selectable {
+        register: &'static str,
+        field: &'static str,
+        options: &'static [(&'static str, &'static str)],
+    },
 }
 
 #[derive(Debug, Eq, PartialEq, Clone)]

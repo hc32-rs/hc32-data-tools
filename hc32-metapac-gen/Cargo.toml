@@ -11,5 +11,6 @@ chiptool = { git = "https://github.com/embassy-rs/chiptool", rev = "e8902440a6ee
 serde = { version = "1.0.157", features = ["derive"] }
 serde_json = "1.0.94"
 proc-macro2 = "1.0.52"
+quote = "1"
 hc32-data-macros = { version = "0.1.0", path = "../hc32-data-macros" }
 hc32-data-serde = { version = "0.1.0", path = "../hc32-data-serde" }

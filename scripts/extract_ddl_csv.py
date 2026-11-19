@@ -278,8 +278,21 @@ def parse_gate_def(sdk_dir, header_text):
                        r"\s*\([^)]*\)\s*\{", stext)
         if not fm:
             continue
-        # take until matching closing brace (approximate: 1500 chars)
-        body = stext[fm.end():fm.end() + 1500]
+        # take until the matching closing brace of the function (brace counting,
+        # NOT a fixed char window: a fixed window truncated PeriphClkEnable's
+        # final else-branch, making default_reg 'AHB0EN' instead of 'APB0EN'
+        # and mis-bussing every default-branch peripheral on HC32F420).
+        depth = 1
+        end = fm.end()
+        for off in range(fm.end(), len(stext)):
+            if stext[off] == "{":
+                depth += 1
+            elif stext[off] == "}":
+                depth -= 1
+                if depth == 0:
+                    end = off
+                    break
+        body = stext[fm.end():end]
         masks = re.findall(r"(?:enPeripheral|\w+)\s*&\s*([A-Za-z_]\w*|0[xX][0-9a-fA-F]+u)",
                            body)
         regs = re.findall(r"(?:M0P_SYSCTRL|HC_SYSCTRL|SYSCTRL|M0P_CLOCK|CLOCK)->\s*([A-Z_0-9]+)",

@@ -25,6 +25,7 @@ xh_{ddl,ll}_sdk ──extract_{ddl,ll}_csv.py──▶ 两侧 data/csv/{chips,in
 两仓库 svd/ ─────chiptool_registers.py────▶ 两侧 data/registers/<kind>_<version>.yaml + register_versions.csv
                 └─svd_to_registers_csv.py─▶ 两侧 data/csv/registers.csv（核对基准）+ svd_meta.csv
 以上全部 CSV ───────csv_to_yaml.py────────▶ 两侧 data/{chips,family,interrupts,dma,memory}/*.yaml
+docs/ 两探针（路由×管脚）└─emit_pins 交集─▶ 两侧 data/pins/<series>_<PART>.yaml（chips YAML include_pins 引用）
 data/{family,interrupts} ─patch_svd_interrupts.py─▶ 两侧 svd/（中断节点回流，改前登记 svd/CHANGELOG.md）
 ```
 
@@ -121,7 +122,7 @@ python3 hc32-data-tools/scripts/export_peripheral_versions.py --check
 
 - **来源**：两仓库 `svd/*.svd`（来源为 SDK 内 SVD）。行尾由各仓库 `.gitattributes`
   统一管控：仓库内与检出均为 LF。
-- **工具**：`chiptool_registers.py` = chiptool `extract-all` + 聚合。
+- **工具**：`chiptool_registers.py` = chiptool `extract-all` + 聚合 + 枚举补录。
 - **过程**：
   1. 14 个老代 SVD 的 `<addressBlock>` 缺 `<usage>` 标签（严格 svd-parser 拒绝），
      脚本自动复制补丁副本到 `build/svd_fixed/`（原始 SVD 不动）再解析；
@@ -130,6 +131,13 @@ python3 hc32-data-tools/scripts/export_peripheral_versions.py --check
   3. 按 `docs/peripheral-version-map.json` 的 active 映射输出规范名称和主块名，
      校验完整实例集合、布局签名与 SHA-256。未知或变化的布局必须先复核映射，不能自动分配编号。
      `derivedFrom` 继承其已确认来源，排除项维持原名称。所有校验完成后才写文件。
+  4. `docs/register-enums/<source>.yaml` 将有 RM/SDK 依据的位域枚举注入 IR，
+     注入发生在布局签名与 SHA-256 校验前。复核更新补录内容时同步更新映射中的
+     `source_sha256`。注入校验字段、位宽、访问语义、变体名、数值及保留编码。
+     `mode_note` 会进入生成文档，供 HAL 核对运行时约束。
+- **TOE 枚举试点**：`usart_ddl_v1` 的 `CR1.TOE` 保留 `toe()/set_toe(u8)`，
+  并新增 `toe_val()/set_toe_val(vals::Toe)`。双轨生成仅用于该兼容字段。
+  元数据中的寄存器 IR 保留枚举引用。
 - **产物**：`data/registers/<kind>_<version>.yaml` + `data/csv/register_versions.csv`
   （`series,instance,kind,version,block` 实例→版本映射，family YAML 引用它）。
 - **核对**：`svd_to_registers_csv.py` 产出实例级 `registers.csv` 作为核对基准；
@@ -169,7 +177,8 @@ python3 hc32-data-tools/scripts/export_peripheral_versions.py --check
      `UNRESOLVED_INTERRUPTS` 登记后单独报告（头枚举跳号等证据不足项，
      当前 6 条：F472/A472 PLA、F334/F336 PLAINT、K116/K118 LVD）；
      登记之外的新未解析项使脚本非零退出，防止悄悄带进生成链。
-- **注意**：引脚复用（pins）暂缺，待从 DS GPIO 章节补齐（文件头有 TODO 注释）。
+- **注意**：引脚复用（pins）按**型号×封装**粒度另存 `data/pins/`（见下节），
+  family YAML 只承载实例物理事实，不混路由数据。
 
 ### `data/interrupts/<series>.yaml`（中断向量）
 
@@ -185,6 +194,28 @@ python3 hc32-data-tools/scripts/export_peripheral_versions.py --check
 - **语义按仓库不同**（文件头注释已写明）：
   - DDL：值 = `DMAC_CONFAx.TRI_SEL` 全局触发源索引，请求与物理通道为运行时软件路由；
   - LL：值 = 设备头 `EVT_SRC_*` 9 位事件号，写 `AOS->DMAx_TRGSELy`。
+
+### `data/pins/<series>_<PART>.yaml`（引脚路由，型号粒度）
+
+- **来源**：两个可复现探针的交集（hc32-data-tools `docs/` 下，均带断言自检）：
+  `pin-mux-probe`（路由表：pad→peripheral/signal/selector，DS 引脚复用表）×
+  `pin-probe`（封装管脚表：terminal→pad，DS 引脚功能表）——路由的 pad 必须
+  在该型号**每个**封装的 GPIO 焊盘集合内。
+- **多封装规则**（`Peripheral.pins` 无封装维度，防止丢失封装归属）：
+  `emit_pins` 逐封装求交集后按型号归组——各封装路由**完全一致**时合并为
+  型号级单文件（header 记录覆盖的封装，如 `LQFP48+QFN48`）；**分歧**或任一
+  封装缺管脚表基准时 `csv_to_yaml.py` 显式退出（非静默合并/丢归属），
+  待引入按封装的路由结构后再接入该型号。`hc32-data-gen` 拒绝
+  `include_pins` 引用多于一个文件。
+- **工具**：`csv_to_yaml.py` 的 `emit_pins`（`PIN_ROUTE_SOURCES` 登记接入系列；
+  行为测试见 `scripts/test_emit_pins.py`）。当前仓库中的登记型号缺失探针 CSV
+  或源表无数据行时，脚本直接退出。chips YAML 的 `cores[].include_pins` 只引用
+  本轮验证并生成的文件，`hc32-data-gen` 按实例名
+  合并到 `core.peripherals[].pins`（ch32-data 同构 `{pin, signal, func}`，
+  `func`=FSEL/Px_sel 编码，模拟/固定功能/副功能三类暂不表达，证据留档探针 README）。
+- **已接入**：HC32F460 样本 JCTA（LQFP48，539 条）/ PCTB（LQFP100，1048 条），
+  F003 路由表已备但封装管脚表未提取，暂不接入。新系列补两探针数据 +
+  登记 `PIN_ROUTE_SOURCES` 即自动进入生成链。
 
 ### `data/memory/<series>_F<n>S<n>.yaml`（内存布局）
 
@@ -224,7 +255,8 @@ python3 hc32-data-tools/scripts/export_peripheral_versions.py --check
 - **`hc32-metapac-gen`**：ARM-only（HC32 中断号已是 CMSIS 0 基，无需 ch32 的
   -16 调整）。同一芯片内同一外设 kind 允许多版本（MODE 拆分的定时器），
   模块名统一 `<kind>_<version>`，其中 version 包含 ddl/ll 命名空间。
-  全部寄存器布局都生成，包含尚未挂接到芯片的 MODE 视图；重生成前清除旧模块目录。每芯片生成 `pac.rs`（寄存器访问）、
+  全部登记的寄存器布局都生成，MODE 视图通过对应物理实例挂接。
+  重生成前清除旧模块目录。每芯片生成 `pac.rs`（寄存器访问）、
   `metadata.rs`（`METADATA` 元数据）、`device.x`（中断向量）、`memory_x/`
   （memory.x 链接脚本素材）。
   chiptool 渲染结果是未排版的 proc-macro2 token 流，`./d gen` 末尾用
@@ -244,7 +276,12 @@ M4F（`hc32f460jcta@thumbv7em`）构建/doc + host 元数据测试。全量 214 
 
 提取侧缺口（补齐后生成侧自动恢复）：
 
-1. **pins 引脚复用**未提取（DS GPIO 章节表格解析），family YAML 留 TODO；
+1. ~~**pins 引脚复用**未提取~~ **小样本已接入**（HC32F460 JCTA/PCTB，见
+   `data/pins/` 一节）：路由×封装交集进入 chips YAML（`include_pins`）→
+   chip JSON → metapac `PeripheralPin`（`pin/signal/func`）。剩余工作按
+   外设类别与系列扩展两探针（`docs/pin-mux-probe`、`docs/pin-probe`），
+   `PIN_ROUTE_SOURCES` 逐系列登记；模拟复用/固定功能/副功能三类的
+   结构表达待后续设计（证据已留档探针 README）；
 2. ~~**SVD MODE 拆分实例**映射待建立~~ **已解决**：`csv_to_yaml.py` 现按
    `_?MODE(0|1|23)$` 后缀把 `register_versions.csv` 的 SVD 视图名
    （`TIM0_MODE0/1/23`、`ATIM0MODE0/1/23`）反向关联到 `peripherals.csv` 的
@@ -259,8 +296,9 @@ M4F（`hc32f460jcta@thumbv7em`）构建/doc + host 元数据测试。全量 214 
 3. **F120/M120** 无 DS，官网行为主源；**F155** DS 版式特殊；**A472** 同缺内存
    布局——生成侧跳过；
 4. 寄存器描述为 SVD 原文（自动生成的占位文本，质量有限）；
-5. HC32 SVD 无 enumeratedValues，`enum/` 段暂为空；后续可用
-   `chiptool transform`（`MakeRegisterArray`/`MergeEnums`）收敛寄存器版本号；
+5. 归档 SVD 的位域暂无 `enumeratedValues` 数据，`usart_ddl_v1.CR1.TOE`
+   已通过补录链生成枚举。扩面时按布局版本核对 RM
+   和 SDK 常量，确认编码、读写语义及跨系列是否一致。`MergeEnums` 可归并已有枚举；
 6. ~~`core.dma_channels`（DMA 控制器通道清单）未生成~~：已接入——通道数来自
    dma.csv（LL：设备头 `AOS_DMA<x>_<n>` 宏范围；DDL：`dmac.h` `DmaCh*` 枚举
    即 channels 列，A052/F052=5、F420=6、其余=2，RM 第 12 章佐证），
@@ -277,9 +315,22 @@ M4F（`hc32f460jcta@thumbv7em`）构建/doc + host 元数据测试。全量 214 
 | ~~外设挂不上寄存器版本（SVD/设备头实例名不一致，见缺口 2）~~ | ~~367~~ → 0 | MODE 视图关联已建立，TIM/ATIM 经 `views` 挂接（见缺口 2），无降级 |
 | 芯片无内存布局（见缺口 3） | 16 | 跳过不生成 |
 | IRQn 同号别名/共享向量（如 `INT000`/`SWINT0`、`BTIM3_4_5`/`GTIM`） | 1192 | 保留枚举首个主名 |
-| DMA 系统事件 + dmac.h 共享模板幽灵项（`PORT_EIRQ`/`LVD`/`EVENT_PORT`；无对应硬件的 `TIM4-6`/`LP_UART`/`LCDTX` 等） | 4116 | 归类计数（INFO），不挂载——前者不属于任何外设实例，后者是跨系列模板中本系列没有的触发 |
+| DMA 系统事件、SDK 共享模板多列的触发，以及下节登记的 HALL/HRPWM 事件 | 4116 | 归类计数（INFO），暂未挂载 |
 | DMA 触发名 ≠ 实例名（HC32A052/F052 `UART0/1`→`USART0/1`） | 40 | 系列别名表挂载（`dmac.h` 注释 + RM TRI_SEL 表证实），信号名保留 SDK 原拼 |
 | DMA 触发来源不明 | 0 | 逐条告警待人工核对 |
+
+### 待核实的中断、DMA 和寄存器语义
+
+| 项目 | 已确认事实与后续核对点 |
+|---|---|
+| K116/K118 的 LVD IRQ 28 | PWC 的 LVD 信号来自 SVD，设备头向量枚举跳过 28。用 RM 向量表、SDK 启动文件和 LVD 例程确认实际路由之前，源信号保留在 CSV，生成的静态引用省略。 |
+| F334/F336 的 PLAINT 和 F472/A472 的 PLA | 设备头分别跳过 SVD 所列的 IRQ 136 和 163。PLA 在 LL 扩展排除清单中，启用该外设时复核。 |
+| F431/M413 的 HALL DMA | 两系列的 family 数据都包含 `HALL`。设备头 `EVT_SRC_HAL_CAP` / `EVT_SRC_HAL_OVF` 对应 HALL 捕获／溢出，事件号为 400/401。当前按已知事件计数，尚未挂接。补齐时用两系列限定别名将事件挂到 `HALL`。 |
+| F334/F336 的 `HRPWM_EEDET` | 设备头给出事件号 219，family 数据含 `HRPWM_COMMON`。启用 HRPWM 时核对该事件的共享范围和归属。 |
+| A052 的 `CONFA5` | SVD 和设备头都定义了该寄存器，驱动的物理通道枚举只覆盖 0–4。保留寄存器描述，通道清单按已确认的 5 个通道生成。槽位用途待 RM 证据确认。 |
+| DDL 定时器切换模式和中断回流 | PAC 的 MODE 视图共用物理地址，门控和中断由 family 物理实例承载。HAL 使用具体系列前需核对停表、写 `MD` 和重配寄存器的时序。SVD 回流仍按实例名匹配，补回流时需定义物理实例的中断如何映射到各视图。 |
+| M458 的 `ADC1_ECOA` | 保留设备头采用的 IRQ 70 公开向量名。外设信号 `ADC1_EOCA` 已解析到该向量。 |
+| OTP、DFLASH、QSPI 等内存窗口 | 当前内存布局生成覆盖代码 Flash、主 SRAM 和已确认的独立 RAM 区。加入其他窗口前需明确它们的角色、访问属性和链接脚本用途。 |
 
 ## CSV 列定义
 
@@ -289,7 +340,10 @@ M4F（`hc32f460jcta@thumbv7em`）构建/doc + host 元数据测试。全量 214 
 - `registers.csv`（审计用）：`series,instance,kind,register,offset,description,
   field,bit_offset,bit_size,access,field_description`；
 - `register_versions.csv`：`series,instance,kind,version,block`；
-- `svd_meta.csv`：`series,cpu,device_name,peripheral_count`。
+- `svd_meta.csv`：`series,cpu,device_name,peripheral_count`；
+- 探针 CSV（hc32-data-tools `docs/`，pins 数据源，不在数据仓库 data/csv）：
+  路由表 `series,pad,peripheral,signal,selector_kind,selector_value,source`；
+  封装管脚表 `sample_part,part_or_package,terminal,pad,kind,source_table,source_page`。
 
 ## CI（.github/workflows/）
 

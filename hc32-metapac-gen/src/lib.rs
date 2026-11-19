@@ -165,6 +165,21 @@ impl Gen {
             include_bytes!("../res/src/mem_layout.rs"),
         )
         .unwrap();
+
+        // host 元数据验收测试（build/ 是生成缓存，模板在 res/tests/ 落盘，
+        // nightly 强推后的 crate 仍带 tests/，CI 的 cargo test 才有得跑）。
+        fs::create_dir_all(self.opts.out_dir.join("tests")).unwrap();
+        for entry in fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/res/tests")).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().and_then(|s| s.to_str()) == Some("rs") {
+                let dest = self
+                    .opts
+                    .out_dir
+                    .join("tests")
+                    .join(path.file_name().unwrap());
+                fs::copy(&path, &dest).unwrap();
+            }
+        }
     }
 }
 

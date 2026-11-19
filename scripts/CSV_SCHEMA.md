@@ -81,9 +81,14 @@ series,instance,kind,base_address,bus,fcg_reg,fcg_field,interrupts,notes
 - `instance`：如 `USART1`、`TIMA0`、`GPIOA`。
 - `kind`：小写外设类别（去数字后缀）：`usart`、`tima`、`gpio`、`adc`…
 - `base_address`：`0x` 十六进制，取自 SVD。
-- `bus`：`AHB`/`APB1`/…（RM/SVD 可查则填，否则空）。
+- `bus`：`AHB`/`APB1`/…（RM/SVD 可查则填，否则空）。注意：family YAML 侧的
+  `rcc.bus`（小写总线域）**不**从本列推导，由 `csv_to_yaml.py` 的 `RCC_META`
+  登记表输出——当前仅 HC32F420、HC32F460 两系列已登记（RM 逐条人工核对），
+  其余系列留空为未确认项，禁止从 FCG 编号推导总线名。
 - `fcg_reg`/`fcg_field`：时钟门控寄存器与位域（如 `FCG1`/`FCG1_USART1_CLKEN`；
   DDL M0 系列形如 `PWC_FCG1`/`PWC_FCG1_USART1EN`）。GPIO 等无门控留空。
+  门控极性不进 CSV：DDL 门控 1=使能、LL PWC_FCG* 0=使能由 `RCC_META` 按系列
+  输出 `rcc.polarity`（同样仅两系列已登记，其余留空）。
 - `interrupts`：该实例的中断**信号名**，`;` 分隔，按 SVD `<interrupt>` 节点顺序
   提取（LL 侧剥 `_IRQn` 后缀）。信号名与 interrupts.csv 的 `name` 不一定同形
   （SVD 与设备头拼写可能异名，如 F472 信号 `ADC_1` vs 头枚举 `ADC1`）；

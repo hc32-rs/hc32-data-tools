@@ -13,6 +13,9 @@ pub struct Peripheral {
     pub views: Vec<peripheral::RegisterView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rcc: Option<peripheral::Rcc>,
+    /// 外设功能（内核）时钟来源，与 rcc 门控解耦；见 peripheral::KernelClock。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kernel_clock: Option<peripheral::KernelClock>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pins: Vec<peripheral::Pin>,
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -196,11 +196,113 @@ def render_layout(ir: dict, rep: tuple[str, str], cover: str) -> str:
                               default_flow_style=False, width=100)
 
 
+def inject_enums(ir: dict, spec: dict, source: str) -> dict:
+    """按补录数据把 enum/ 节点与字段 enum 引用注入 IR（rename_block 之后、
+    signature 之前调用，使枚举参与布局签名与跨系列一致性校验）。
+
+    校验（任一失败抛 ValueError，防止带病数据进入签名/digest 环节）：
+    - fieldset/字段存在且位宽与枚举 bit_size 一致；
+    - access 与补录声明一致（SVD 读写语义不能被补录改写）；
+    - 变体名符合 IR 命名且不重复、值在位宽范围内且不重复、不与保留值重叠；
+    - reserved 值在位宽范围内（越界/非整数报错）且必须未命名
+      （保留编码不得成为有效变体）；
+    - 未移位编码：value 直接是寄存器位段值，注入时不再移位。
+
+    字段的 mode_note 并入枚举 description 尾部（换行分隔），随 chiptool
+    的 #[doc] 渲染到生成的枚举类型上，把运行时切换/模式约束带进 rustdoc。
+    """
+    for key, fdesc in spec.get("fields", {}).items():
+        try:
+            fs_name, fld_name = key.split(".", 1)
+        except ValueError:
+            raise ValueError(f"{source}: 字段键须为 FIELDSET.FIELD 形式: {key}")
+        fs = ir.get(f"fieldset/{fs_name}")
+        if fs is None:
+            raise ValueError(f"{source}: fieldset/{fs_name} 不存在（布局漂移或键写错）")
+        fld = next((f for f in fs.get("fields", []) if f.get("name") == fld_name), None)
+        if fld is None:
+            raise ValueError(f"{source}: 字段 {key} 不存在（布局漂移或键写错）")
+        enum_name = fdesc.get("enum")
+        enum_def = spec.get("enums", {}).get(enum_name)
+        if enum_def is None:
+            raise ValueError(f"{source}: {key} 引用的枚举 {enum_name} 未定义")
+        bit_size = enum_def.get("bit_size")
+        if not isinstance(bit_size, int) or bit_size <= 0:
+            raise ValueError(f"{source}: 枚举 {enum_name} 缺少正整数 bit_size")
+        if fld.get("bit_size") != bit_size:
+            raise ValueError(
+                f"{source}: {key} 位宽 {fld.get('bit_size')} ≠ 枚举 {enum_name} bit_size {bit_size}")
+        declared = fdesc.get("access", "read-write")
+        actual = fld.get("access", "read-write")
+        # IR 中 read-write 省略输出；声明 read-write 视为与省略一致
+        if declared != actual and not (declared == "read-write" and "access" not in fld):
+            raise ValueError(f"{source}: {key} 访问语义 {actual} ≠ 补录声明 {declared}")
+        ir_key = f"enum/{enum_name}"
+        if ir_key in ir:
+            raise ValueError(f"{source}: IR 已存在 {ir_key}（SVD 自带枚举与补录冲突）")
+        variants = enum_def.get("variants", [])
+        reserved = enum_def.get("reserved", {}).get("values", [])
+        used = set()
+        used_names = set()
+        for v in variants:
+            name = str(v.get("name", ""))
+            if not re.fullmatch(r"[A-Z][A-Z0-9_]*", name):
+                raise ValueError(f"{source}: 枚举 {enum_name} 变体名须为大写下划线: {v.get('name')}")
+            if name in used_names:
+                raise ValueError(f"{source}: 枚举 {enum_name} 变体名重复: {name}")
+            used_names.add(name)
+            val = v.get("value")
+            if not isinstance(val, int) or not 0 <= val < (1 << bit_size):
+                raise ValueError(f"{source}: 枚举 {enum_name} 变体 {name} 值非法: {val}")
+            if val in used:
+                raise ValueError(f"{source}: 枚举 {enum_name} 变体值重复: {val}")
+            used.add(val)
+        for rv in reserved:
+            if not isinstance(rv, int) or not 0 <= rv < (1 << bit_size):
+                raise ValueError(
+                    f"{source}: 枚举 {enum_name} 保留值越界（须为 0..{(1 << bit_size) - 1} 内整数）: {rv}")
+            if rv in used:
+                raise ValueError(f"{source}: 保留值 {rv} 被命名为变体（保留编码不得为有效变体）")
+        # 枚举级 description 附加 mode_note（运行时切换/模式约束），随 #[doc]
+        # 渲染到生成的枚举类型上（rustdoc 可见）；无则原样。
+        enum_desc = enum_def.get("description")
+        mode_note = fdesc.get("mode_note")
+        if mode_note:
+            enum_desc = f"{enum_desc}\n{mode_note}" if enum_desc else mode_note
+        variants_out = [
+            {"name": v["name"], "value": v["value"],
+             **({"description": v["description"]} if v.get("description") else {})}
+            for v in variants
+        ]
+        ir[ir_key] = {
+            **({"description": enum_desc} if enum_desc else {}),
+            "bit_size": bit_size, "variants": variants_out,
+        }
+        fld["enum"] = enum_name
+    return ir
+
+
+def load_enum_specs(repo: Path) -> dict[str, dict]:
+    """加载 docs/register-enums/<source>.yaml 补录数据：{source: spec}。"""
+    d = repo / "docs" / "register-enums"
+    out: dict[str, dict] = {}
+    if not d.is_dir():
+        return out
+    for f in sorted(d.glob("*.yaml")):
+        spec = yaml.safe_load(f.read_text(encoding="utf-8")) or {}
+        source = spec.get("source")
+        if source != f.stem:
+            raise ValueError(f"{f}: source 字段 {source!r} 须等于文件名主干 {f.stem!r}")
+        out[source] = spec
+    return out
+
+
 def process_repo(repo: Path, work: Path, fixed: Path) -> dict:
     svd_dir = repo / "svd"
     out_reg = repo / "data" / "registers"
     out_reg.mkdir(parents=True, exist_ok=True)
     rows: list[dict] = []
+    enum_specs = load_enum_specs(repo)
 
     side_of_repo = repo.name.removeprefix("hc32-").removesuffix("-data")
     series_ir: dict[str, dict[str, dict]] = {}
@@ -227,6 +329,7 @@ def process_repo(repo: Path, work: Path, fixed: Path) -> dict:
                 for inst, parent in parents.items() if parent in series_ir.get(s, {})}
     covered = set()
     outputs = {}
+    enum_sources_seen = set()
     for layout in manifest["layouts"]:
         members = [(s, inst) for s, names in layout["instances"].items() for inst in names]
         candidates = set()
@@ -238,10 +341,21 @@ def process_repo(repo: Path, work: Path, fixed: Path) -> dict:
             candidates.add((s, series_derived[s][inst]))
         s, inst = min(candidates)
         block = layout["block"]
+        # 枚举补录注入：位于布局签名与 SHA-256 校验之前（rename_block 之后），
+        # 使枚举内容进入布局签名（跨系列一致性）与最终 digest（manifest 复核）。
+        # 对布局的全部成员系列注入同一份 spec 后再比对签名。
+        spec = enum_specs.get(layout["source"])
+        if spec is not None:
+            enum_sources_seen.add(layout["source"])
         ir = rename_block(series_ir[s][inst], block)
+        if spec is not None:
+            ir = inject_enums(ir, spec, layout["source"])
         sig = signature(ir)
         for ss, ii in candidates:
-            if signature(rename_block(series_ir[ss][ii], block)) != sig:
+            other = rename_block(series_ir[ss][ii], block)
+            if spec is not None:
+                other = inject_enums(other, spec, layout["source"])
+            if signature(other) != sig:
                 raise ValueError(f"Layout drift: {layout['source']} / {ss}/{ii}; review mapping")
         cover = ", ".join(sorted({ss for ss, _ in members}))
         content = render_layout(ir, (s, inst), cover)
@@ -267,6 +381,9 @@ def process_repo(repo: Path, work: Path, fixed: Path) -> dict:
                          "version": version, "block": block})
     if expected != covered:
         raise ValueError(f"Unreviewed instances: {sorted(expected - covered)}")
+    orphans = set(enum_specs) - enum_sources_seen
+    if orphans:
+        raise ValueError(f"Enum 补录文件未映射到任何 active 布局: {sorted(orphans)}")
     # All input validation precedes mutations; remove only obsolete register YAMLs.
     for old in out_reg.glob("*.yaml"):
         if old.stem not in outputs:

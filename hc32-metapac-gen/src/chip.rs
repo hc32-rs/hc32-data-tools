@@ -180,6 +180,14 @@ fn render_metadata_rs(
         let ir_regex = Regex::new("\":ir_for:([a-z0-9_]+):\"").unwrap();
         let mut data = ir_regex.replace_all(&data, "&$1::REGISTERS").to_string();
 
+        // Debug 输出的枚举变体是裸名（`Fixed {`），Rust 2024 要求路径限定。
+        // 给 kernel_clock 的变体补 `PeripheralKernelClock::` 前缀。
+        let kc_regex =
+            Regex::new(r"(?m)^(\s*)(Fixed|Selective|Selectable) \{").unwrap();
+        data = kc_regex
+            .replace_all(&data, "${1}PeripheralKernelClock::$2 {")
+            .to_string();
+
         for (module, version) in peripheral_versions {
             writeln!(
                 &mut data,
