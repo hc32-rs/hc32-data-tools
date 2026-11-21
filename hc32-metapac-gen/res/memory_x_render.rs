@@ -150,6 +150,9 @@ pub fn render_memory_x(regions: &[Region]) -> String {
         writeln!(s, r#"REGION_ALIAS("FLASH", CODE);"#).unwrap();
         writeln!(s).unwrap();
     }
+    if !regions.iter().any(|r| r.name == "RAM") {
+        writeln!(s, r#"REGION_ALIAS("RAM", {});"#, ram_name).unwrap();
+    }
     writeln!(s, r#"REGION_ALIAS("REGION_TEXT", {});"#, text_target).unwrap();
     writeln!(s, r#"REGION_ALIAS("REGION_RODATA", {});"#, text_target).unwrap();
     writeln!(s, r#"REGION_ALIAS("REGION_DATA", {});"#, ram_name).unwrap();
